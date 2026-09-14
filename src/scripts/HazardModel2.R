@@ -89,10 +89,9 @@ add_item_to_json_array=function(file_path, new_item) {
 # 1. A csv file of selected set of risk factors and weights.
 # 2. A csv file of sub-administrative areas (to get the standard data frame). 
 # 3. A csv file of data totals (to get data totals on all user-selected factors). 
-# 4. A csv file of distances to closest known infection. 
-# 5. A csv file of the average movements. 
+# 4. A csv file of adjusted distances to closest known infection by subadmin unit.
 
-# WEIGHTS TABLE -----------------------------------------------
+# 1. WEIGHTS TABLE -----------------------------------------------
 	
 # Read in the (Required) Weights file. 
 	Weights_filepath=file.path("","data","Weights.csv")
@@ -100,9 +99,8 @@ add_item_to_json_array=function(file_path, new_item) {
 	#Weights=readr::read_csv("Weights.csv") 
 
 	# Formatting the weights table.  
-	Weights=as.data.frame(cbind(Weights$RiskFactor,Weights$UserSelection,
-	Weights$MeanWeightNear,Weights$MeanWeightFar,Weights$SDWeightNear,Weights$SDWeightFar))
-  colnames(Weights)=c("RiskFactor","UserSelection","MeanWeightNear","MeanWeightFar","SDWeightNear","SDWeightFar")
+	Weights=as.data.frame(cbind(Weights$RiskFactor,Weights$UserSelection,Weights$Weight,Weights$SDWeight))
+  colnames(Weights)=c("RiskFactor","UserSelection","Weight","SDWeight")
   
   # Get the number of risk factors selected. 
   NumberRisksSelected=sum(as.numeric(Weights$UserSelection))
@@ -114,10 +112,11 @@ add_item_to_json_array=function(file_path, new_item) {
 	# has a NA for a weight, then stop the code. 
 	if (NumberRisksSelected==1){
 	  which=Weights$UserSelection[Weights$UserSelection==1]
-	    if (is.na(Weights$MeanWeightNear[which])|is.na(Weights$MeanWeightFar[which])){
+	    if (is.na(Weights$Weight[which])){
 	      # Terminate the code. 
 	      line="We're sorry. You selected a single risk factor, and that factor does not 
-	      have a valid weight. Return to the CWD Data Warehouse and alter the weights, or select a new set of risk factors."
+	      have a valid weight. Return to the CWD Data Warehouse and alter the 
+	      weights, or select a new set of risk factors."
 	      write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
 	      # Quit the session.
 	      quit(status=70)}}
@@ -126,7 +125,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	# has a 0 for a weight, then stop the code. 
 	if (NumberRisksSelected==1){
 	  which=as.numeric(Weights$UserSelection[Weights$UserSelection==1])
-	  if (Weights$MeanWeightNear[which]==0|Weights$MeanWeightFar[which]==0){
+	  if (Weights$Weight[which]==0){
 	    # Terminate the code. 
 	    line="We're sorry. You selected a single risk factor, and that factor does not 
 	      have a non-zero weight. Return to the CWD Data Warehouse and alter the 
@@ -146,7 +145,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	# least one risk factor exists with non-zero weights.
 	NotZero=Weights[rowSums(Weights!=0)>0,]
 	NotZeroDim=as.numeric(nrow(NotZero))
-	# If all are zeros, terminate the script. 
+	# If all are zeros, terminate the script.
 	if (NotZeroDim==0){
 	    line="We're sorry. This map would be boring because there are no weights!"
 	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
@@ -160,26 +159,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	
 	# The final version of the weights is now named Cleaned_Weights.
 	
-# DISTANCE FILE ------------------------------------------------
-	
-	# Read in the (Required) Distance file. 	
-	Distance_filepath=file.path("","data","Distance.csv")
-	Distance=readr::read_csv(Distance_filepath,show_col_types = FALSE) 	
-	#Distance=readr::read_csv("Distance.csv") 
-	
-	# Formatting the distance file. 
-	Cleaned_Distance=as.data.frame(cbind(Distance$SubAdminID,Distance$FullName,Distance$DistanceToNearestPositive,Distance$DistanceAdjustedWithMigration))
-	colnames(Cleaned_Distance)=c("SubAdminID","FullName","DistanceToNearestPositive","DistanceAdjustedWithMigration")
-	
-	# Check. Make sure that there are no NAs in the distance file. 
-	Cleaned_Distance[is.na(Cleaned_Distance)]=0
-	
-	# Check. Make sure all distances are positive. 
-	Cleaned_Distance[Cleaned_Distance<0]=0
-	
-	# The cleaned distance file is now named Cleaned_Distance.
-	
-# SUBADMIN -----------------------------------------------------
+# 2. SUBADMIN -----------------------------------------------------
 	
 	# Read in the (Required) SubAdmin file. 
 	Subadmin_filepath=file.path("","data","Subadmin.csv")
@@ -193,12 +173,31 @@ add_item_to_json_array=function(file_path, new_item) {
 	# Get the number of subadmin units. 
 	FullNumberAreas=as.numeric(nrow(Subadmin))
 	
-# DATA TOTALS FILE ---------------------------------------------
+# 3. ADJUSTED DISTANCE FILE --------------------------------------
+	
+	# Read in the (Required) adjusted distance file. 	
+	AdjustedDistance_filepath=file.path("","data","AdjustedDistance.csv")
+	AdjustedDistance=readr::read_csv(AdjustedDistance_filepath,show_col_types = FALSE) 
+	#AdjustedDistance=readr::read_csv("AdjustedDistance.csv")
+	
+	# Formatting the movement file. 
+	Cleaned_AdjustedDistance=as.data.frame(cbind(AdjustedDistance$SubAdminID,AdjustedDistance$AdjustedDistance))
+	colnames(Cleaned_AdjustedDistance)=c("SubAdminID","AdjustedDistance")
+	
+	# Check. Make sure that there are no NAs in the AdjustedDistance file. 
+	Cleaned_AdjustedDistance[is.na(Cleaned_AdjustedDistance)]=0
+	
+	# Check. Make sure all AdjustedDistances are positive. 
+	AdjustedDistance[AdjustedDistance<0]=0
+	
+	# The cleaned AdjustedDistance file is now named Cleaned_AdjustedDistance.
+	
+# 4. DATA TOTALS FILE ---------------------------------------------
 	
 	# Read in the (Required) Data Totals file. 
 	DataTotals_filepath=file.path("","data","DataTotals.csv")
 	DataTotals=readr::read_csv(DataTotals_filepath,show_col_types = FALSE) 
-	#DataTotals=readr::read_csv("DataTotals.csv") 
+	DataTotals=readr::read_csv("DataTotals.csv") 
 
 	# Formatting the data totals. 
 	Cleaned_DataTotals=as.data.frame(cbind(
@@ -209,7 +208,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	  DataTotals$Feedgrounds,
 	  DataTotals$Guzzlers,
 	  DataTotals$BaitingStations,
-	  DataTotals$AgriculturePractices,
+	  DataTotals$AgriculturalPractices,
 	  DataTotals$CaptiveCervidFacilities,
 	  DataTotals$RehabilitationFacilities,
 	  DataTotals$Taxidermists,
@@ -232,7 +231,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	    "Feedgrounds",
 	    "Guzzlers",
 	    "BaitingStations",
-	    "AgriculturePractices",
+	    "AgriculturalPractices",
 	    "CaptiveCervidFacilities",
 	    "RehabilitationFacilities",
 	    "Taxidermists",
@@ -295,67 +294,50 @@ add_item_to_json_array=function(file_path, new_item) {
 	  if (x!=0) {
 	    Cleaned_DataTotals[,h]=as.numeric(Cleaned_DataTotals[,h])/sum(as.numeric(Cleaned_DataTotals[,h]),na.rm=TRUE)}}
 	
-	# Join distance data to the data to make the last two comparisons. 	
-	Data_Distance=left_join(Cleaned_DataTotals,Cleaned_Distance,by=c("SubAdminID","FullName"))	
-	
-	# We will now scale dispersal, which is column 21. 
+	# We will now scale dispersal (column #21). 
 	# Dispersal matters fully (i.e., has a value of 1) if a single animal can arrive from the nearest known infection. 
-	# Thus, if dispersal is greater than or equal to the distance to the nearest positive, then the value will be scaled to 1.
-	# Whereas if dispersal is less than the distance to the nearest positive, then the value will be scaled to the proportion of the distance. 
+	# Thus, if dispersal is greater than or equal to the adjusted distance, then the cleaned dispersal value will be set to 1.
+	# Whereas if dispersal is less than the adjusted distance, then the value will be scaled to the proportion of the distance covered. 
 	for (k in 1:NumSubAreas){
 	  y=as.numeric(Cleaned_DataTotals[k,21])
 	  if (is.na(y)){Cleaned_DataTotals[k,21]=NA}else{
-	    if (y>=as.numeric(Data_Distance$DistanceToNearestPositive[k])){Cleaned_DataTotals[k,21]=1
-	    }else{Cleaned_DataTotals[k,21]=as.numeric(Cleaned_DataTotals[k,21])/as.numeric(Data_Distance$DistanceToNearestPositive[k])}
+	    # If the hosts can go farther than the distance to the nearest, then the risk factor is set to maximum. 
+	    if (y>=as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])){Cleaned_DataTotals[k,21]=1
+	    }else{
+	      # If the host only go a portion of the distance to nearest, then the risk factor is set to the proportion of the distance.
+	      if (as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])==0){Cleaned_DataTotals[k,21]=0}else{Cleaned_DataTotals[k,21]=as.numeric(Cleaned_DataTotals[k,21])/as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])}
+	      }
 	  }}
 	# Now that the units are consistent, we will scale the entire vector to one. 
 	Cleaned_DataTotals[,21]=as.numeric(Cleaned_DataTotals[,21])/sum(as.numeric(Cleaned_DataTotals[,21]),na.rm=TRUE)
 	
-	# Finally, we will scale seasonal migration, which is column 22. 
+	# Finally, we will scale seasonal migration (column #22). 
 	# Seasonal migration matters fully (i.e., has a value of 1) if the herd's movements touch the nearest known infection.
 	# Thus, if the seasonal migration is greater than the distance to the nearest positive, then the value will be scaled to 1. 
 	# Whereas if seasonal migration is less than the distance to the nearest positive, then the value will be scaled to the proportion of the distance. 
 	for (k in 1:NumSubAreas){
 	  y=as.numeric(Cleaned_DataTotals[k,22])
 	  if (is.na(y)){Cleaned_DataTotals[k,22]=NA}else{
-	    if (y>=as.numeric(Data_Distance$DistanceToNearestPositive[k])){Cleaned_DataTotals[k,22]=1
-	    }else{Cleaned_DataTotals[k,22]=as.numeric(Cleaned_DataTotals[k,22])/as.numeric(Data_Distance$DistanceToNearestPositive[k])}
+	    # If the herds move farther than the distance to the nearest, then the risk factor is set to maximum.
+	    if (y>=as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])){Cleaned_DataTotals[k,22]=1
+	    }else{
+	      # If the herds only go a portion of the distance to nearest, then the risk factor is set to the proportion of the distance.
+	      if(as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])==0){Cleaned_DataTotals[k,22]=0}else{Cleaned_DataTotals[k,22]=as.numeric(Cleaned_DataTotals[k,22])/as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])}
+	      }
 	  }}
 	# Now that the units are consistent, we will scale the entire vector to one. 
 	Cleaned_DataTotals[,22]=as.numeric(Cleaned_DataTotals[,22])/sum(as.numeric(Cleaned_DataTotals[,22]),na.rm=TRUE)
 	
 	# The complete scaled data table is now named Cleaned_DataTotals. 
-	
-# MOVEMENT FILE --------------------------------------
-	
-	# Read in the (Required) Movements file. 	
-	Movement_filepath=file.path("","data","AverageMovement.csv")
-	Movement=readr::read_csv(Movement_filepath,show_col_types = FALSE) 
-	#Movement=readr::read_csv("Movement.csv")
-	
-	# Formatting the movement file. 
-	Cleaned_Movement=as.data.frame(cbind(Movement$SubAdminID,Movement$FullName,Movement$AverageMovement))
-	colnames(Cleaned_Movement)=c("SubAdminID","FullName","AverageMovement")
-	
-	# Check. Make sure that there are no NAs in the movement file. 
-	Cleaned_Movement[is.na(Cleaned_Movement)]=0
-	
-	# Check. Make sure all movements are positive. 
-	Cleaned_Movement[Cleaned_Movement<0]=0
-	
-	# The cleaned movement file is now named Cleaned_Movement.
 
 # FOLD DATA STREAMS TOGETHER ------------------------------------------------
 	
-# Join cleaned data total table to SubAdmin ID. 
-	SubAdmin_Data=left_join(Subadmin,Cleaned_DataTotals,by=c("SubAdminID","FullName"))
+# Join cleaned adjusted distance data to SubAdmin ID. 	
+	SubAdmin_Distance=left_join(Subadmin,Cleaned_AdjustedDistance,by=c("SubAdminID"))	
+	
+# Now join the cleaned data total table to SubAdmin ID. 
+	SubAdmin_Data=left_join(SubAdmin_Distance,Cleaned_DataTotals,by=c("SubAdminID","FullName"))
 
-# Join cleaned distance data to SubAdmin ID. 	
-	SubAdmin_Distance=left_join(Subadmin,Cleaned_Distance,by=c("SubAdminID","FullName"))	
-	
-	# Join cleaned movement data to SubAdmin ID. 	
-	SubAdmin_Movement=left_join(Subadmin,Cleaned_Movement,by=c("SubAdminID","FullName"))	
-	
 # COMPUTE QUANTITIES FOR EACH OF THE i SPATIAL CELLS. ------------------
 
 	# Initialize data storage for the i spatial cells. 
@@ -364,42 +346,29 @@ add_item_to_json_array=function(file_path, new_item) {
 	HazardPerCell=rep(0,FullNumberAreas)
 	
 	# Initialize data storage for the j risk factors in the i cells.
-	# Means. 
+	# Measures of center. (Note: Could be mean or median, whatever is selected/passed by user).
 	eBPerCell=rep(0,FullNumberAreas)
 	eRFPerCell=matrix(0,FullNumberAreas,20)
 	eWPerCell=matrix(0,FullNumberAreas,20)
 	
-	# Mins and Maxes. 
-	eRFPerCell_MAX=matrix(0,FullNumberAreas,20)
-	eWPerCell_MAX=matrix(0,FullNumberAreas,20)
-	eRFPerCell_MIN=matrix(0,FullNumberAreas,20)
-	eWPerCell_MIN=matrix(0,FullNumberAreas,20)
-	
-	# Means. 
-	# Loop through all i spatial cells to find the means. 
+	# Measures of center. 
+	# Loop through all i spatial cells to find the measures of center. 
 	for (i in 1:FullNumberAreas){
+	  
+	  Distance=as.numeric(SubAdmin_Data$AdjustedDistance)
+	  
 	  # Compute the Baseline Per Spatial Cell. 
-	  Distance=as.numeric(SubAdmin_Distance$DistanceAdjustedWithMigration)
 	  FRAME=read.csv("/data/CWD_Transition_Probability.csv")
 	  model=lm(transition_prob~dist_1,data=FRAME)
 	  distance=data.frame(dist_1=Distance[i])
 	  BaselinePerCell[i]=as.numeric(max(0,predict(model,newdata=distance)))
+	  
 	  # Compute the Total Risk Per Spatial Cell. 
-	  Distance=as.numeric(SubAdmin_Distance$DistanceAdjustedWithMigration)
-	  AverageMovement=as.numeric(SubAdmin_Movement$AverageMovement)
 	  DataCountMatrix=SubAdmin_Data[,3:22]
-	  WeightVectorNear=as.numeric(Cleaned_Weights$MeanWeightNear) # 20 element vector with all numbers. 
-	  WeightVectorFar=as.numeric(Cleaned_Weights$MeanWeightFar) # 20 element vector with all numbers.
-	      # Nearer scenario. 
-	      if(Distance[i]<=AverageMovement[i]) {
-	        WeightVector = WeightVectorNear
+	  WeightVector=as.numeric(Cleaned_Weights$Weight) # 20 element vector with all numbers.
 	        if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{
-	          TotalPerCell[i]=as.numeric(sum(WeightVectorNear*DataCountMatrix[i,]))}}
-	      # Farther Scenario. 
-	      if(Distance[i]>AverageMovement[i]) {
-	        WeightVector = WeightVectorFar
-	        if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{
-	          TotalPerCell[i]=sum(WeightVectorFar*as.numeric(DataCountMatrix[i,]))}}
+	          TotalPerCell[i]=as.numeric(sum(WeightVector*DataCountMatrix[i,]))}
+
 	  # Compute the Total Hazard Per Cell. 
 	  if (is.na(TotalPerCell[i])){HazardPerCell[i]=NA}else{HazardPerCell[i]=BaselinePerCell[i]+BaselinePerCell[i]*TotalPerCell[i]}
     # Compute the elasticity of the baseline. 
@@ -417,96 +386,6 @@ add_item_to_json_array=function(file_path, new_item) {
 	  } # End j. 
   } # End i areas. 
 	
-	# Maximums.  
-	# Loop through all i spatial cells to find the maxes. 
-	for (i in 1:FullNumberAreas){
-	  # Compute the Baseline Per Spatial Cell. 
-	  Distance=as.numeric(SubAdmin_Distance$DistanceAdjustedWithMigration)
-	  FRAME=read.csv("/data/CWD_Transition_Probability.csv")
-	  model=lm(transition_prob~dist_1,data=FRAME)
-	  distance=data.frame(dist_1=Distance[i])
-	  BaselinePerCell[i]=as.numeric(max(0,predict(model,newdata=distance)))
-	  # Compute the Total Risk Per Spatial Cell. 
-	  Distance=as.numeric(SubAdmin_Distance$DistanceAdjustedWithMigration)
-	  AverageMovement=as.numeric(SubAdmin_Movement$AverageMovement)
-	  DataCountMatrix=SubAdmin_Data[,3:22]
-	  WeightVectorNear=as.numeric(Cleaned_Weights$MeanWeightNear) # 20 element vector with all numbers. 
-	  WeightVectorFar=as.numeric(Cleaned_Weights$MeanWeightFar) # 20 element vector with all numbers.
-	  # Adjust to the maximum weight. 
-	  WeightVectorNear=WeightVectorNear+2*as.numeric(Cleaned_Weights$SDWeightNear)
-	  WeightVectorFar=WeightVectorFar+2*as.numeric(Cleaned_Weights$SDWeightFar)
-	  # Nearer scenario. 
-	  if(Distance[i]<=AverageMovement[i]) {
-	    WeightVector = WeightVectorNear
-	    if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{
-	      TotalPerCell[i]=as.numeric(sum(WeightVectorNear*DataCountMatrix[i,]))}}
-	  # Farther Scenario. 
-	  if(Distance[i]>AverageMovement[i]) {
-	    WeightVector = WeightVectorFar
-	    if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{
-	      TotalPerCell[i]=sum(WeightVectorFar*as.numeric(DataCountMatrix[i,]))}}
-	  # Compute the Total Hazard Per Cell. 
-	  if (is.na(TotalPerCell[i])){HazardPerCell[i]=NA}else{HazardPerCell[i]=BaselinePerCell[i]+BaselinePerCell[i]*TotalPerCell[i]}
-	  # Compute the elasticity of the baseline. 
-	  if(is.na(HazardPerCell[i])){eBPerCell[i]=NA}else{
-	    if(HazardPerCell[i]==0){eBPerCell[i]=0}else{eBPerCell[i]=(BaselinePerCell[i]/HazardPerCell[i])*(1+sum(WeightVector*DataCountMatrix[i,]))}}
-	    # Compute the elasticity of each of the j risk factors in cell i.
-	    for (j in 1:20){
-	      if (is.na(HazardPerCell[i])){eRFPerCell_MAX[i,j]=NA}else{
-	        if(HazardPerCell[i]==0){eRFPerCell_MAX[i,j]=0}else{eRFPerCell_MAX[i,j]=(BaselinePerCell[i]*WeightVector[j]*DataCountMatrix[i,j])/HazardPerCell[i]}}
-	    } # End j. 
-	  # Compute the elasticity of each of the j weights in cell j. 
-	  for (j in 1:20){ 
-	    if(is.na(HazardPerCell[i])){eWPerCell_MAX[i,j]=NA}else{
-	      if(HazardPerCell[i]==0){eWPerCell_MAX[i,j]=0}else{eWPerCell_MAX[i,j]=(BaselinePerCell[i]*WeightVector[j]*DataCountMatrix[i,j])/HazardPerCell[i]}}
-	  } # End j. 
-	} # End i areas.
-	
-	# Minimums. 
-	# Loop through all i spatial cells to find the mins. 
-	for (i in 1:FullNumberAreas){
-	  # Compute the Baseline Per Spatial Cell. 
-	  Distance=as.numeric(SubAdmin_Distance$DistanceAdjustedWithMigration)
-	  FRAME=read.csv("/data/CWD_Transition_Probability.csv")
-	  model=lm(transition_prob~dist_1,data=FRAME)
-	  distance=data.frame(dist_1=Distance[i])
-	  BaselinePerCell[i]=as.numeric(max(0,predict(model,newdata=distance)))
-	  # Compute the Total Risk Per Spatial Cell. 
-	  Distance=as.numeric(SubAdmin_Distance$DistanceAdjustedWithMigration)
-	  AverageMovement=as.numeric(SubAdmin_Movement$AverageMovement)
-	  DataCountMatrix=SubAdmin_Data[,3:22]
-	  WeightVectorNear=as.numeric(Cleaned_Weights$MeanWeightNear) # 20 element vector with all numbers. 
-	  WeightVectorFar=as.numeric(Cleaned_Weights$MeanWeightFar) # 20 element vector with all numbers.
-	  # Adjust to the maximum weight. 
-	  WeightVectorNear=max(0,WeightVectorNear-2*as.numeric(Cleaned_Weights$SDWeightNear))
-	  WeightVectorFar=max(0,WeightVectorFar-2*as.numeric(Cleaned_Weights$SDWeightFar))
-	  # Nearer scenario. 
-	  if(Distance[i]<=AverageMovement[i]) {
-	    WeightVector = WeightVectorNear #nh added
-	    if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{
-	      TotalPerCell[i]=as.numeric(sum(WeightVectorNear*DataCountMatrix[i,]))}}
-	  # Farther Scenario. 
-	  if(Distance[i]>AverageMovement[i]) {
-	    WeightVector = WeightVectorFar #nh added
-	    if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{
-	      TotalPerCell[i]=sum(WeightVectorFar*as.numeric(DataCountMatrix[i,]))}}
-	  # Compute the Total Hazard Per Cell. 
-	  if (is.na(TotalPerCell[i])){HazardPerCell[i]=NA}else{HazardPerCell[i]=BaselinePerCell[i]+BaselinePerCell[i]*TotalPerCell[i]}
-	  # Compute the elasticity of the baseline. 
-	  if(is.na(HazardPerCell[i])){eBPerCell[i]=NA}else{
-	    if(HazardPerCell[i]==0){eBPerCell[i]=0}else{eBPerCell[i]=(BaselinePerCell[i]/HazardPerCell[i])*(1+sum(WeightVector*DataCountMatrix[i,]))}}
-	    # Compute the elasticity of each of the j risk factors in cell i.
-	    for (j in 1:20){
-	      if (is.na(HazardPerCell[i])){eRFPerCell_MIN[i,j]=NA}else{
-	        if(HazardPerCell[i]==0){eRFPerCell_MIN[i,j]=0}else{eRFPerCell_MIN[i,j]=(BaselinePerCell[i]*WeightVector[j]*DataCountMatrix[i,j])/HazardPerCell[i]}}
-	    } # End j. 
-	  # Compute the elasticity of each of the j weights in cell j. 
-	  for (j in 1:20){ 
-	    if(is.na(HazardPerCell[i])){eWPerCell_MIN[i,j]=NA}else{
-	      if(HazardPerCell[i]==0){eWPerCell_MIN[i,j]=0}else{eWPerCell_MIN[i,j]=(BaselinePerCell[i]*WeightVector[j]*DataCountMatrix[i,j])/HazardPerCell[i]}}
-	  } # End j. 
-	} # End i areas.
-	
 # PREPARE THE OUTPUT FRAME. -------------------------------
 	OutputHazards=cbind(Subadmin,BaselinePerCell,TotalPerCell,HazardPerCell,eBPerCell,eRFPerCell,eWPerCell)
 	colnames(OutputHazards)=c("SubAdminID","FullName","BaselineRisk","TotalRisk","TotalHazard",
@@ -523,7 +402,8 @@ add_item_to_json_array=function(file_path, new_item) {
 	                               "ew_AgriculturePractices","ew_CaptiveCervidFacilities",
 	                               "ew_RehabilitationFacilities","ew_Taxidermists","ew_Processors",
 	                               "ew_RenderingFacilities","ew_Incinerators","ew_FoodBanks",
-	                               "ew_Landfill","ew_Dumping","ew_Sheds","ew_Roadkill","ew_LocalPractices","ew_FreeRangingCervidDispersal","ew_SeasonalMigration")
+	                               "ew_Landfill","ew_Dumping","ew_Sheds","ew_Roadkill","ew_LocalPractices",
+	                               "ew_FreeRangingCervidDispersal","ew_SeasonalMigration")
 	
 	# Determine which sub-admin areas had insufficient data.
 	omitted_areas=OutputHazards[!complete.cases(OutputHazards),]
