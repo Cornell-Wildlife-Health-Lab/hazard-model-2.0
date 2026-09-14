@@ -99,8 +99,8 @@ add_item_to_json_array=function(file_path, new_item) {
 	#Weights=readr::read_csv("Weights.csv") 
 
 	# Formatting the weights table.  
-	Weights=as.data.frame(cbind(Weights$RiskFactor,Weights$UserSelection,Weights$Weight,Weights$SDWeight))
-  colnames(Weights)=c("RiskFactor","UserSelection","Weight","SDWeight")
+	Weights=as.data.frame(cbind(Weights$RiskFactor,Weights$UserSelection,Weights$WeightNear,Weights$SDWeightNear,Weights$WeightFar,Weights$SDWeightFar))
+  colnames(Weights)=c("RiskFactor","UserSelection","WeightNear","SDWeightNear","WeightFar","SDWeightFar")
   
   # Get the number of risk factors selected. 
   NumberRisksSelected=sum(as.numeric(Weights$UserSelection))
@@ -112,27 +112,45 @@ add_item_to_json_array=function(file_path, new_item) {
 	# has a NA for a weight, then stop the code. 
 	if (NumberRisksSelected==1){
 	  which=Weights$UserSelection[Weights$UserSelection==1]
-	    if (is.na(Weights$Weight[which])){
+	    if (is.na(Weights$WeightNear[which])){
 	      # Terminate the code. 
 	      line="We're sorry. You selected a single risk factor, and that factor does not 
-	      have a valid weight. Return to the CWD Data Warehouse and alter the 
-	      weights, or select a new set of risk factors."
+	      have a valid near weight. Return to the CWD Data Warehouse and alter the 
+	      weights, or select a new set of near risk factors."
 	      write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
 	      # Quit the session.
-	      quit(status=70)}}
+	      quit(status=70)}
+	  if (is.na(Weights$WeightFar[which])){
+	    # Terminate the code. 
+	    line="We're sorry. You selected a single risk factor, and that factor does not 
+	      have a valid far weight. Return to the CWD Data Warehouse and alter the 
+	      weights, or select a new set of far risk factors."
+	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
+	    # Quit the session.
+	    quit(status=70)}
+	  }
 	
 	# Check. If the user selects only one risk factor, and that risk factor 
 	# has a 0 for a weight, then stop the code. 
 	if (NumberRisksSelected==1){
 	  which=as.numeric(Weights$UserSelection[Weights$UserSelection==1])
-	  if (Weights$Weight[which]==0){
+	  if (Weights$WeightNear[which]==0){
 	    # Terminate the code. 
 	    line="We're sorry. You selected a single risk factor, and that factor does not 
-	      have a non-zero weight. Return to the CWD Data Warehouse and alter the 
-	    weights, or select a new set of risk factors."
+	      have a non-zero near weight. Return to the CWD Data Warehouse and alter the 
+	    weights, or select a new set of near risk factors."
 	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
 	    # Quit the session.
-	    quit(status=70)}}
+	    quit(status=70)}
+	  if (Weights$WeightFar[which]==0){
+	    # Terminate the code. 
+	    line="We're sorry. You selected a single risk factor, and that factor does not 
+	      have a non-zero far weight. Return to the CWD Data Warehouse and alter the 
+	    weights, or select a new set of far risk factors."
+	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
+	    # Quit the session.
+	    quit(status=70)}
+	  }
 
   # At this point, the risk factors table and the weights table should only have 
   # weights and SDs for relevant risk factors (and no weights where irrelevant). 
@@ -188,7 +206,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	Cleaned_AdjustedDistance[is.na(Cleaned_AdjustedDistance)]=0
 	
 	# Check. Make sure all AdjustedDistances are positive. 
-	AdjustedDistance[AdjustedDistance<0]=0
+	Cleaned_AdjustedDistance[Cleaned_AdjustedDistance<0]=0
 	
 	# The cleaned AdjustedDistance file is now named Cleaned_AdjustedDistance.
 	
@@ -364,22 +382,30 @@ add_item_to_json_array=function(file_path, new_item) {
 	  BaselinePerCell[i]=as.numeric(max(0,predict(model,newdata=distance)))
 	  
 	  # Compute the Total Risk Per Spatial Cell. 
-	  DataCountMatrix=SubAdmin_Data[,3:22]
-	  WeightVector=as.numeric(Cleaned_Weights$Weight) # 20 element vector with all numbers.
-	        if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{
-	          TotalPerCell[i]=as.numeric(sum(WeightVector*DataCountMatrix[i,]))}
+	  DataCountMatrix=SubAdmin_Data[,4:23]
+	  
+	  # Get the weights to be used per spatial cell. 
+	  UsedWeights=c()
+	  if(Cleaned_AdjustedDistance$AdjustedDistance[i]==0){UsedWeights=Weights$WeightNear}else{UsedWeights=Weights$WeightFar}
+	  
+	  WeightVector=as.numeric(UsedWeights) # 20 element vector with all numbers.
+	  
+	        if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{TotalPerCell[i]=as.numeric(sum(WeightVector*DataCountMatrix[i,]))}
 
 	  # Compute the Total Hazard Per Cell. 
 	  if (is.na(TotalPerCell[i])){HazardPerCell[i]=NA}else{HazardPerCell[i]=BaselinePerCell[i]+BaselinePerCell[i]*TotalPerCell[i]}
-    # Compute the elasticity of the baseline. 
+    
+	  # Compute the elasticity of the baseline. 
 	  if(is.na(HazardPerCell[i])){eBPerCell[i]=NA}else{
 	    if(HazardPerCell[i]==0){eBPerCell[i]=0}else{eBPerCell[i]=(BaselinePerCell[i]/HazardPerCell[i])*(1+sum(WeightVector*DataCountMatrix[i,]))}}
-    # Compute the elasticity of each of the j risk factors in cell i.
+    
+	  # Compute the elasticity of each of the j risk factors in cell i.
 	  for (j in 1:20){
 	    if (is.na(HazardPerCell[i])){eRFPerCell[i,j]=NA}else{
 	    if(HazardPerCell[i]==0){eRFPerCell[i,j]=0}else{eRFPerCell[i,j]=(BaselinePerCell[i]*WeightVector[j]*DataCountMatrix[i,j])/HazardPerCell[i]}}
 	  } # End j. 
-    # Compute the elasticity of each of the j weights in cell j. 
+    
+	  # Compute the elasticity of each of the j weights in cell j. 
 	  for (j in 1:20){ 
 	    if(is.na(HazardPerCell[i])){eWPerCell[i,j]=NA}else{
 	    if(HazardPerCell[i]==0){eWPerCell[i,j]=0}else{eWPerCell[i,j]=(BaselinePerCell[i]*WeightVector[j]*DataCountMatrix[i,j])/HazardPerCell[i]}}
