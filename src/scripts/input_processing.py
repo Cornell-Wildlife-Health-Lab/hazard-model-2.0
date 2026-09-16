@@ -29,9 +29,10 @@ Inputs:
     waterbodies.json
     wildlife_rehabilitation_facilities.json
 Outputs:
+  AdjustedDistance.csv
+  AverageMovement.csv
+  CWD_Transition_Probability.csv
   DataTotals.csv
-  Distance.csv
-  Movement.csv
   Subadmin.csv
   Weights.csv
   info.html
@@ -50,9 +51,9 @@ import logging
 import datetime
 import psycopg2
 from shapely.geometry import shape, mapping, MultiPoint, Point
-from shapely.ops import unary_union
+from shapely.ops import unary_union, transform
 from shapely import STRtree, shortest_line
-from pyproj import Geod
+from pyproj import Geod, Transformer
 
 ######################
 # Database Credentials
@@ -656,19 +657,57 @@ for sa in Risk_factor_list:
       sa[factor] = 0
 
 ###############################################################################
-# DISTANCE CALCULATIONS (PROXIMITY ANALYSIS)
+# CERVID HOME RANGES (loaded here; also used by the distance section below)
 ###############################################################################
-# Calculate the distance from the edge of the given sub-administrative area to
-# the centroid of the nearest positive sub-administrative area. If migration
-# corridors are used, then union the migration corridor withe the current sub-
-# administrative area to determine the shortest possible path to the nearest
-# positive sub-administrative area centroid.
+# Home range data must be available before the adjusted distance calculation
+# because each subadmin geometry is buffered by its max home range distance.
 
-logging.info("Calculating spatial distances to nearest positive areas...")
-logging.info("Fetching positive sub-administrative area centroids from PostgreSQL...")
-positive_location_geoms = []
+logging.info("Processing cervid home range data...")
+home_ranges_data = []
+with open(home_range_file_path, 'r', encoding='utf-8') as f:
+  for line in f:
+    if line.strip():
+      home_ranges_data.append(json.loads(line))
 
-# Proximity analysis requires known positive locations from the central DB
+max_home_range = {}  # {subadmin_id: max_home_range_km}
+for home_range in home_ranges_data:
+  for sa, area in home_range['data'].items():
+    if sa in max_home_range:
+      if area > max_home_range[sa]:
+        max_home_range[sa] = area
+    else:
+      max_home_range[sa] = area
+
+logging.info(f"Home range data loaded for {len(max_home_range)} subadmin areas.")
+
+###############################################################################
+# ADJUSTED DISTANCE CALCULATIONS (PROXIMITY ANALYSIS)
+###############################################################################
+# For each sub-administrative area, calculate the shortest distance (km) from
+# its *modified* geometry to the nearest CWD-positive sub-administrative area.
+#
+# Modified geometry construction:
+#   1. Project the subadmin polygon to North America Albers Equal Area Conic
+#      (EPSG:102008), which preserves distances accurately at the continental
+#      scale and avoids the latitude-dependent distortion of buffering in
+#      geographic degrees.
+#   2. Buffer the projected polygon outward by the species' max home range
+#      distance (km → metres) for that area.
+#   3. Union in any migration corridor polygons (also projected) that intersect
+#      the buffered geometry, extending the effective reach along corridor paths.
+#   4. Reproject the modified geometry back to WGS-84 (EPSG:4326).
+#
+# Distance is then measured geodesically (via pyproj Geod) from the edge of
+# the modified WGS-84 geometry to the nearest CWD-positive subadmin polygon
+# (fetched from PostgreSQL, filtered by current_cwd_status = 1).
+#
+# If no CWD-positive polygons exist in the database the distance is recorded
+# as None (written as "NA" in the CSV) — not zero — because zero would
+# incorrectly imply the area is co-located with a positive zone.
+
+logging.info("Fetching CWD-positive subadmin area polygons from PostgreSQL...")
+positive_area_geoms = []  # WGS-84 Shapely geometries for CWD-positive subadmin areas
+
 try:
   conn = psycopg2.connect(
     user=pg_user,
@@ -677,122 +716,132 @@ try:
     port=pg_port,
     database=pg_database)
   cur = conn.cursor()
-  # Fetch centroids for positive areas
-  cur.execute('SELECT "latitude", "longitude" FROM "admin_areas"."subadmin_areas_centroids_CWD_positive_only"')
+  # Fetch full polygons for confirmed CWD-positive subadmin areas only.
+  cur.execute(
+    'SELECT ST_AsGeoJSON(geometry) '
+    'FROM "admin_areas"."subadmin_areas" '
+    'WHERE current_cwd_status = 1'
+  )
   rows = cur.fetchall()
   cur.close()
   conn.close()
 
-  for row in rows:
-    if row[0] is not None and row[1] is not None:
-      # Note: Point takes (longitude, latitude) as (x, y)
-      positive_location_geoms.append(Point(float(row[1]), float(row[0])))
+  for (geojson_str,) in rows:
+    if geojson_str:
+      positive_area_geoms.append(shape(json.loads(geojson_str)))
 
-  if not positive_location_geoms:
-    logging.warning("No positive locations found in database. Distance calculations may be invalid.")
-    model_log_html("WARNING: No CWD-positive locations found in database.", "p")
+  if not positive_area_geoms:
+    logging.warning("No CWD-positive area polygons found. AdjustedDistance will be None for all areas.")
+    model_log_html("WARNING: No CWD-positive subadmin polygons found in database. AdjustedDistance set to NA.", "p")
   else:
-    logging.info(f"Successfully loaded {len(positive_location_geoms)} positive locations.")
-    model_log_html(f"Loaded {len(positive_location_geoms)} positive locations from database.", "p")
+    logging.info(f"Loaded {len(positive_area_geoms)} CWD-positive subadmin polygons.")
+    model_log_html(f"Loaded {len(positive_area_geoms)} CWD-positive subadmin area polygons from database.", "p")
 except Exception as e:
-  logging.error(f"Failed to fetch positive locations from PostgreSQL: {e}")
-  model_log_html("ERROR: Could not fetch positive locations from database.", "p")
+  logging.error(f"Failed to fetch CWD-positive subadmin polygons from PostgreSQL: {e}")
+  model_log_html("ERROR: Could not fetch CWD-positive subadmin area polygons. Execution halted.", "p")
+  sys.exit(1)
 
-positive_location_geoms_all = MultiPoint(positive_location_geoms)
+# ---------------------------------------------------------------------------
+# Projection setup
+# EPSG:102008 – North America Albers Equal Area Conic.
+# All buffering is performed in this projection (units: metres) so that the
+# buffer radius is the same physical distance regardless of latitude.
+# Geometries are reprojected back to WGS-84 for the geodesic distance step.
+# ---------------------------------------------------------------------------
+to_albers   = Transformer.from_crs("EPSG:4326", "ESRI:102008", always_xy=True)
+from_albers = Transformer.from_crs("ESRI:102008", "EPSG:4326", always_xy=True)
 
-# Organize subadmin geometries for distance calculations
+def project(geom, transformer):
+  """Reprojects a Shapely geometry using a pyproj Transformer."""
+  return transform(transformer.transform, geom)
+
+# Pre-project all corridor geometries once so we don't repeat the work inside
+# the per-subadmin loop.
+corridor_geoms_albers = [project(c, to_albers) for c in corridor_geoms]
+corridor_tree = STRtree(corridor_geoms_albers)
+
+# Positive area polygons remain in WGS-84 for the geodesic distance step.
+# Build a spatial index for fast nearest-neighbour queries.
+positive_area_tree = STRtree(positive_area_geoms) if positive_area_geoms else STRtree([])
+
+# Organise all subadmin geometries for iteration.
 subadmin_geoms = []
 for area in all_subadmin_areas:
   subadmin_geoms.append(
     {
       '_id': area['_id'],
-      'full_name': area['full_name'],
-      'geom': shape(area["boundary"]["geometry"])
+      'full_name': area.get('full_name', ''),
+      'geom': shape(area["boundary"]["geometry"])  # WGS-84
     }
   )
-logging.info(f"Using {len(positive_location_geoms)} positive locations for distance analysis.")
 
-# STRtree spatial indices are used to optimize distance queries, reducing
-# complexity from O(n^2) to roughly O(n log n).
-corridor_tree = STRtree(corridor_geoms)
-positive_tree = STRtree(positive_location_geoms)
-
-# Empty dictionary for holding distance measurements for each subadmin area
-distances = []
+logging.info("Calculating adjusted distances to nearest CWD-positive areas...")
+adjusted_distances = []  # list of {SubAdminID, AdjustedDistance} dicts
 
 for subadmin in subadmin_geoms:
-  area_geom = subadmin['geom']
+  sa_id    = subadmin['_id']
+  base_wgs = subadmin['geom']  # WGS-84
 
-  # Base Case: Distance from the edge of the subadmin area to the nearest positive centroid.
-  nearest_positive_index = positive_tree.query_nearest(area_geom)[0]
-  nearest_positive = positive_location_geoms[nearest_positive_index]
+  # ------------------------------------------------------------------
+  # Step 1 – Project to Albers and buffer by the max home range (metres).
+  # If no home range is available for this area the polygon is used as-is
+  # (zero-metre buffer leaves the geometry unchanged).
+  # ------------------------------------------------------------------
+  home_range_km = max_home_range.get(sa_id, 0) or 0
+  home_range_m  = home_range_km * 1000
 
-  line_base = shortest_line(area_geom, nearest_positive)
-  base_meters = geod.geometry_length(line_base)
-  base_dist_km = round(base_meters / 1000, 2)
+  base_albers    = project(base_wgs, to_albers)
+  buffered_albers = base_albers.buffer(home_range_m) if home_range_m > 0 else base_albers
 
-  # Scenario: If a migration corridor touches the area, animals can travel
-  # "through" the corridor. We check if any part of the corridor is closer
-  # to a positive location than the area itself.
-  overlapping_indices = corridor_tree.query(area_geom)
+  # ------------------------------------------------------------------
+  # Step 2 – Union in any migration corridors (Albers) that intersect
+  # the buffered geometry, extending the effective reach along corridors.
+  # ------------------------------------------------------------------
+  if corridor_geoms_albers:
+    candidate_indices = corridor_tree.query(buffered_albers)
+    touching_corridors = [
+      corridor_geoms_albers[idx]
+      for idx in candidate_indices
+      if corridor_geoms_albers[idx].intersects(buffered_albers)
+    ]
+    modified_albers = (
+      unary_union([buffered_albers] + touching_corridors)
+      if touching_corridors
+      else buffered_albers
+    )
+  else:
+    modified_albers = buffered_albers
 
-  touching_corridors = [
-    corridor_geoms[corr] for corr in overlapping_indices
-    if corridor_geoms[corr].intersects(area_geom)
-  ]
+  # ------------------------------------------------------------------
+  # Step 3 – Reproject the modified geometry back to WGS-84, then
+  # measure the geodesic distance to the nearest positive area polygon.
+  #
+  # None is returned when no positive polygons exist; this writes as
+  # "NA" in the CSV and avoids the false implication of zero distance.
+  # ------------------------------------------------------------------
+  if not positive_area_geoms:
+    adj_dist_km = None
+  else:
+    modified_wgs = project(modified_albers, from_albers)
+    nearest_idx  = positive_area_tree.query_nearest(modified_wgs)[0]
+    nearest_positive_geom = positive_area_geoms[nearest_idx]
+    connecting_line = shortest_line(modified_wgs, nearest_positive_geom)
+    dist_meters = geod.geometry_length(connecting_line)
+    adj_dist_km = round(dist_meters / 1000, 2)
 
-  # Calculate distance considering corridors
-  if touching_corridors:
-    corridor_distances = []
-    for corridor in touching_corridors:
-      nearest_c_index = positive_tree.query_nearest(corridor)[0]
-      nearest_positive = positive_location_geoms[nearest_c_index]
+  adjusted_distances.append({
+    "SubAdminID":       sa_id,
+    "AdjustedDistance": adj_dist_km
+  })
 
-      # Measure shortest path from the corridor to a known positive
-      line_corridor = shortest_line(corridor, nearest_positive)
-      corridor_meters = geod.geometry_length(line_corridor)
-      corridor_distances.append(round(corridor_meters/1000, 2))
-
-    # Get the minimum fo any distance from any positive county to any corridor
-    min_corridor_km = min(corridor_distances)
-
-    with_corridor_dist_km = min(base_dist_km, min_corridor_km)
-
-  else: # Use the base distance
-    with_corridor_dist_km = base_dist_km
-
-  # Store distances
-  subadmin_record = {
-    "SubAdminID": subadmin['_id'],
-    "FullName":subadmin['full_name'],
-    "DistanceToNearestPositive": base_dist_km,
-    "DistanceAdjustedWithMigration": with_corridor_dist_km
-  }
-  distances.append(subadmin_record)
-
-model_log_html("Proximity analysis to CWD-positive areas complete.", "p")
+logging.info("Adjusted distance calculations complete.")
+model_log_html("Adjusted proximity distances to CWD-positive areas calculated.", "p")
 
 ###############################################################################
-# CERVID MOVEMENT (HOME RANGES)
+# CERVID MOVEMENT (HOME RANGES) — output list
 ###############################################################################
-
-logging.info("Processing cervid home range data...")
-# Get home range areas ndjson
-home_ranges_data = []
-with open(home_range_file_path, 'r', encoding='utf-8') as f:
-  for line in f:
-    if line.strip():
-      # Each line is parsed individually
-      home_ranges_data.append(json.loads(line))
-
-max_home_range = {}
-for home_range in home_ranges_data:
-  for sa, area in home_range['data'].items():
-    if sa in max_home_range:
-      if area > max_home_range[sa]:
-        max_home_range[sa] = area
-    else:
-      max_home_range[sa] = area
+# max_home_range was built above (before the distance section). This block
+# uses it to populate the AverageMovement.csv output list only.
 
 # Create Movement dictionaries
 movement_list = copy.deepcopy(subadmin_list)
@@ -898,16 +947,22 @@ with open(data_path / "DataTotals.csv", 'w', newline='') as f:
   writer.writeheader()
   writer.writerows(replace_none_with_na(Risk_factor_list))
 
-# Write Distance.csv
-with open(data_path / "Distance.csv", 'w', newline='') as f:
-  fieldnames = ["SubAdminID", "FullName", "DistanceToNearestPositive", "DistanceAdjustedWithMigration"]
+# Write AdjustedDistance.csv
+# Fields: SubAdminID, AdjustedDistance (km)
+# This is the file read by HazardModel2.R as the per-area proximity input.
+# AdjustedDistance is the geodesic distance from the modified subadmin geometry
+# (base polygon buffered by home range distance in Albers Equal Area projection,
+# then unioned with any intersecting migration corridors) to the edge of the
+# nearest CWD-positive subadmin area polygon. A value of NA indicates that no
+# CWD-positive areas were found in the database for this model run.
+with open(data_path / "AdjustedDistance.csv", 'w', newline='') as f:
   writer = csv.DictWriter(
     f,
-    fieldnames=fieldnames,
+    fieldnames=["SubAdminID", "AdjustedDistance"],
     restval="NA"
     )
   writer.writeheader()
-  writer.writerows(replace_none_with_na(distances))
+  writer.writerows(replace_none_with_na(adjusted_distances))
 
 # Write to Movement.csv
 with open(data_path / "AverageMovement.csv", 'w', newline='') as f:

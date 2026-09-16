@@ -1,6 +1,7 @@
 # local Python virtual environment
 .venv/
 .env
+.python-version
 
 # local R virtual environment
 /renv/
