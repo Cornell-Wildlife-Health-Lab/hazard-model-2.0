@@ -478,9 +478,9 @@ for human_readable_name, csv_factor_name in risk_factor_name_to_csv_column.items
   row = {
     'RiskFactor': csv_factor_name,
     'UserSelection': 0, # Default to inactive; updated below based on input files.
-    'MeanWeightNear': risk_weights_json.get('closer', {}).get(human_readable_name, {}).get('mean'),
+    'WeightNear': risk_weights_json.get('closer', {}).get(human_readable_name, {}).get('mean'),
     'SDWeightNear': risk_weights_json.get('closer', {}).get(human_readable_name, {}).get('std_deviation'),
-    'MeanWeightFar': risk_weights_json.get('farther', {}).get(human_readable_name, {}).get('mean'),
+    'WeightFar': risk_weights_json.get('farther', {}).get(human_readable_name, {}).get('mean'),
     'SDWeightFar': risk_weights_json.get('farther', {}).get(human_readable_name, {}).get('std_deviation')
   }
   weights_csv_data.append(row)
@@ -664,21 +664,30 @@ for sa in Risk_factor_list:
 
 logging.info("Processing cervid home range data...")
 home_ranges_data = []
-with open(home_range_file_path, 'r', encoding='utf-8') as f:
-  for line in f:
-    if line.strip():
-      home_ranges_data.append(json.loads(line))
-
 max_home_range = {}  # {subadmin_id: max_home_range_km}
-for home_range in home_ranges_data:
-  for sa, area in home_range['data'].items():
-    if sa in max_home_range:
-      if area > max_home_range[sa]:
-        max_home_range[sa] = area
-    else:
-      max_home_range[sa] = area
 
-logging.info(f"Home range data loaded for {len(max_home_range)} subadmin areas.")
+if home_range_file_path.exists():
+  with open(home_range_file_path, 'r', encoding='utf-8') as f:
+    for line in f:
+      if line.strip():
+        home_ranges_data.append(json.loads(line))
+
+  for home_range in home_ranges_data:
+    for sa, area in home_range['data'].items():
+      # Skip null/None values — treat missing home range as unknown (no buffer)
+      if area is None:
+        continue
+      if sa in max_home_range:
+        if area > max_home_range[sa]:
+          max_home_range[sa] = area
+      else:
+        max_home_range[sa] = area
+
+  logging.info(f"Home range data loaded for {len(max_home_range)} subadmin areas.")
+  
+else:
+  logging.info("cervid_home_range_size.ndJson not provided. No home range buffering will be applied to subadmin geometries.")
+  model_log_html("Cervid home range file not provided. Subadmin areas will not be buffered for distance calculations.", "p")
 
 ###############################################################################
 # ADJUSTED DISTANCE CALCULATIONS (PROXIMITY ANALYSIS)
@@ -719,8 +728,8 @@ try:
   # Fetch full polygons for confirmed CWD-positive subadmin areas only.
   cur.execute(
     'SELECT ST_AsGeoJSON(geometry) '
-    'FROM "admin_areas"."subadmin_areas" '
-    'WHERE current_cwd_status = 1'
+    'FROM "admin_areas"."subadmin_areas_cwd_status" '
+    'WHERE "cwd_status_current" = 1'
   )
   rows = cur.fetchall()
   cur.close()
@@ -731,8 +740,10 @@ try:
       positive_area_geoms.append(shape(json.loads(geojson_str)))
 
   if not positive_area_geoms:
-    logging.warning("No CWD-positive area polygons found. AdjustedDistance will be None for all areas.")
-    model_log_html("WARNING: No CWD-positive subadmin polygons found in database. AdjustedDistance set to NA.", "p")
+    logging.error("No CWD-positive area polygons found in database. At least one positive area is required. Execution halted.")
+    model_log_html("ERROR", "h4")
+    model_log_html("No CWD-positive subadmin area polygons were found in the database. Execution halted.", "p")
+    sys.exit(1)
   else:
     logging.info(f"Loaded {len(positive_area_geoms)} CWD-positive subadmin polygons.")
     model_log_html(f"Loaded {len(positive_area_geoms)} CWD-positive subadmin area polygons from database.", "p")
@@ -748,8 +759,8 @@ except Exception as e:
 # buffer radius is the same physical distance regardless of latitude.
 # Geometries are reprojected back to WGS-84 for the geodesic distance step.
 # ---------------------------------------------------------------------------
-to_albers   = Transformer.from_crs("EPSG:4326", "ESRI:102008", always_xy=True)
-from_albers = Transformer.from_crs("ESRI:102008", "EPSG:4326", always_xy=True)
+to_Albers   = Transformer.from_crs("EPSG:4326", "ESRI:102008", always_xy=True)
+from_Albers = Transformer.from_crs("ESRI:102008", "EPSG:4326", always_xy=True)
 
 def project(geom, transformer):
   """Reprojects a Shapely geometry using a pyproj Transformer."""
@@ -757,8 +768,8 @@ def project(geom, transformer):
 
 # Pre-project all corridor geometries once so we don't repeat the work inside
 # the per-subadmin loop.
-corridor_geoms_albers = [project(c, to_albers) for c in corridor_geoms]
-corridor_tree = STRtree(corridor_geoms_albers)
+corridor_geoms_Albers = [project(c, to_Albers) for c in corridor_geoms]
+corridor_tree = STRtree(corridor_geoms_Albers)
 
 # Positive area polygons remain in WGS-84 for the geodesic distance step.
 # Build a spatial index for fast nearest-neighbour queries.
@@ -790,44 +801,40 @@ for subadmin in subadmin_geoms:
   home_range_km = max_home_range.get(sa_id, 0) or 0
   home_range_m  = home_range_km * 1000
 
-  base_albers    = project(base_wgs, to_albers)
-  buffered_albers = base_albers.buffer(home_range_m) if home_range_m > 0 else base_albers
+  base_Albers    = project(base_wgs, to_Albers)
+  buffered_Albers = base_Albers.buffer(home_range_m) if home_range_m > 0 else base_Albers
 
   # ------------------------------------------------------------------
   # Step 2 – Union in any migration corridors (Albers) that intersect
   # the buffered geometry, extending the effective reach along corridors.
   # ------------------------------------------------------------------
-  if corridor_geoms_albers:
-    candidate_indices = corridor_tree.query(buffered_albers)
+  if corridor_geoms_Albers:
+    candidate_indices = corridor_tree.query(buffered_Albers)
     touching_corridors = [
-      corridor_geoms_albers[idx]
+      corridor_geoms_Albers[idx]
       for idx in candidate_indices
-      if corridor_geoms_albers[idx].intersects(buffered_albers)
+      if corridor_geoms_Albers[idx].intersects(buffered_Albers)
     ]
-    modified_albers = (
-      unary_union([buffered_albers] + touching_corridors)
+    modified_Albers = (
+      unary_union([buffered_Albers] + touching_corridors)
       if touching_corridors
-      else buffered_albers
+      else buffered_Albers
     )
   else:
-    modified_albers = buffered_albers
+    modified_Albers = buffered_Albers
 
   # ------------------------------------------------------------------
   # Step 3 – Reproject the modified geometry back to WGS-84, then
   # measure the geodesic distance to the nearest positive area polygon.
-  #
-  # None is returned when no positive polygons exist; this writes as
-  # "NA" in the CSV and avoids the false implication of zero distance.
+  # positive_area_geoms is guaranteed non-empty at this point — execution
+  # halts above if the database returns no CWD-positive polygons.
   # ------------------------------------------------------------------
-  if not positive_area_geoms:
-    adj_dist_km = None
-  else:
-    modified_wgs = project(modified_albers, from_albers)
-    nearest_idx  = positive_area_tree.query_nearest(modified_wgs)[0]
-    nearest_positive_geom = positive_area_geoms[nearest_idx]
-    connecting_line = shortest_line(modified_wgs, nearest_positive_geom)
-    dist_meters = geod.geometry_length(connecting_line)
-    adj_dist_km = round(dist_meters / 1000, 2)
+  modified_wgs = project(modified_Albers, from_Albers)
+  nearest_idx  = positive_area_tree.query_nearest(modified_wgs)[0]
+  nearest_positive_geom = positive_area_geoms[nearest_idx]
+  connecting_line = shortest_line(modified_wgs, nearest_positive_geom)
+  dist_meters = geod.geometry_length(connecting_line)
+  adj_dist_km = round(dist_meters / 1000, 2)
 
   adjusted_distances.append({
     "SubAdminID":       sa_id,
@@ -903,7 +910,7 @@ with open(data_path / "Subadmin.csv", 'w', newline='') as f:
 
 # Write to Weights.csv
 with open(data_path / "Weights.csv", 'w', newline='') as f:
-  fieldnames = ["RiskFactor", "UserSelection", "MeanWeightNear", "MeanWeightFar", "SDWeightNear", "SDWeightFar"]
+  fieldnames = ["RiskFactor", "UserSelection", "WeightNear", "SDWeightNear", "WeightFar", "SDWeightFar"]
   writer = csv.DictWriter(
     f,
     fieldnames=fieldnames,
