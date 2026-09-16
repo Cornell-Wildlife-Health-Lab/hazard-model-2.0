@@ -215,7 +215,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	# Read in the (Required) Data Totals file. 
 	DataTotals_filepath=file.path("","data","DataTotals.csv")
 	DataTotals=readr::read_csv(DataTotals_filepath,show_col_types = FALSE) 
-	DataTotals=readr::read_csv("DataTotals.csv") 
+	# DataTotals=readr::read_csv("DataTotals.csv") 
 
 	# Formatting the data totals. 
 	Cleaned_DataTotals=as.data.frame(cbind(

@@ -452,7 +452,7 @@ risk_factor_name_to_csv_column = {
   "Feedgrounds": "Feedgrounds",
   "Guzzlers": "Guzzlers",
   "Baiting stations": "BaitingStations",
-  "Agriculture practices": "AgriculturePractices",
+  "Agriculture practices": "AgriculturalPractices",
   "Captive cervid facilities": "CaptiveCervidFacilities",
   "Wildlife rehabilitation facilities": "RehabilitationFacilities",
   "Taxidermists": "Taxidermists",
@@ -486,7 +486,7 @@ for human_readable_name, csv_factor_name in risk_factor_name_to_csv_column.items
 ############################
 
 risk_factor_file_paths = {
-  "AgriculturePractices": data_path / "risk_factors" / "agricultural_practices.json",
+  "AgriculturalPractices": data_path / "risk_factors" / "agricultural_practices.json",
   "Sheds": data_path / "risk_factors" / "antler_shed_collection.json",
   "BaitingStations": data_path / "risk_factors" / "baiting_stations.json",
   "CaptiveCervidFacilities": data_path / "risk_factors" / "captive_cervid_facilities.json",
@@ -915,7 +915,7 @@ with open(data_path / "DataTotals.csv", 'w', newline='') as f:
     "Feedgrounds",
     "Guzzlers",
     "BaitingStations",
-    "AgriculturePractices",
+    "AgriculturalPractices",
     "CaptiveCervidFacilities",
     "RehabilitationFacilities",
     "Taxidermists",
@@ -968,7 +968,7 @@ with open(data_path / "CWD_Transition_Probability.csv", 'w', newline='') as f:
 
 model_log_html("Model input files (CSVs) generated successfully.", "p")
 
-######################
+#################################
 # Export GeoJSON Files (Optional)
 # Exports processed geometries for visualization in GIS software. The resulting
 # data are not used by the CWD Data Warehouse or the model.
