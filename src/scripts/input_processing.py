@@ -7,6 +7,7 @@ Inputs:
   params.json
   risk_weights.json
   seasonal_migration.json
+  cervid_home_range_size.ndJson
   sub_administrative_areas.ndJson
   risk_factors/ (optional)
     agricultural_practices.json
@@ -30,7 +31,6 @@ Inputs:
     wildlife_rehabilitation_facilities.json
 Outputs:
   AdjustedDistance.csv
-  AverageMovement.csv
   CWD_Transition_Probability.csv
   DataTotals.csv
   Subadmin.csv
@@ -271,9 +271,9 @@ add_item_to_json_file_list(attachments_json_path, attachment)
 # Create log file including any parent folders (if they don't already exist)
 os.makedirs(os.path.dirname(pathlib.Path(logging_path)), exist_ok=True)
 
-logging.basicConfig(level = logging.DEBUG, # Alternatively, could use DEBUG, INFO, WARNING, ERROR, CRITICAL
+logging.basicConfig(level = logging.DEBUG,
                     filename = logging_path,
-                    filemode = 'w', # a is append, w is overbite
+                    filemode = 'w',
                     datefmt = '%Y-%m-%d %H:%M:%S',
                     format = '%(asctime)s - %(levelname)s - %(message)s')
 
@@ -282,10 +282,8 @@ def handle_uncaught_exception(type, value, traceback):
   logging.error(f"{type} error has occurred with value: {value}. Traceback: {traceback}")
 sys.excepthook = handle_uncaught_exception
 
-## Initialize the HTML feedback log
-
-# Clear model log file contents if necessary.
-open(pathlib.Path(model_metadata_log_file), 'w').close()
+# Initialize the HTML feedback log
+open(pathlib.Path(model_metadata_log_file), 'w').close() # Clear model log file contents if necessary.
 model_log_html("Model Execution Summary", "h3")
 model_log_html("Model: Hazard Risk Model 2")
 model_log_html('Date: ' + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + ' GMT', "p")
@@ -294,13 +292,11 @@ logging.info("Model: Hazard Risk Model 2")
 logging.info('Date: ' + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + ' GMT')
 logging.info("This log records data for debugging purposes in the case of a model execution error.")
 
-######
-# MAIN
-
 ################
 # Subadmin Areas
+################
 
-# Get subadmin areas ndjson
+# Load subadmin areas ndjson representing management units of interest
 all_subadmin_areas = []
 with open(subadmins_file_path, 'r', encoding='utf-8') as f:
   for line in f:
@@ -310,14 +306,14 @@ logging.info(f"Loaded {len(all_subadmin_areas)} sub-administrative areas from ge
 subadmin_id_to_code = {area['_id']: area.get('code') for area in all_subadmin_areas}
 model_log_html("Base geographic sub-administrative area data loaded.", "p")
 
-###############################################################################
+##################
 # MODEL PARAMETERS
-###############################################################################
+##################
 
 logging.info("Loading model parameters...")
 
 try:
-  # Load the master configuration for the current model run.
+  # Load the master configuration for the current model run
   with open(pathlib.Path(parameters_file), 'r') as f:
     params = json.load(f)
     logging.info("Parameters json file loaded successfully")
@@ -334,11 +330,9 @@ provider_admin_area = params['_provider']['_administrative_area']['administrativ
 model_log_html(f"Provider geographic focus: {provider_admin_area}", "p")
 del(params['_provider'])
 
-##############
-# Subadmin.csv
-# Fields: SubAdminID, FullName, Name
+# Get sub-administrative areas for modeling
 
-logging.info(f"Identifying sub-administrative units for modeling...")
+logging.info(f"Identifying sub-administrative aras for modeling...")
 
 subadmin_list = []
 
@@ -353,11 +347,12 @@ for _subadmin_id in params['_sub_administrative_areas']:
       continue
   subadmin_list.append(subadmin_dict)
 
-model_log_html(f"Preparing model data for {len(subadmin_list)} sub-administrative units.", "p")
+model_log_html(f"Preparing model data for {len(subadmin_list)} sub-administrative areas.", "p")
 
-###############################################################################
+#####################
 # MIGRATION CORRIDORS
-###############################################################################
+#####################
+
 # Pre-process migration corridors to determine how they influence proximity to
 # infected areas.
 
@@ -431,10 +426,11 @@ logging.info(f"Calculated migration distances. {count_with_migration} areas inte
 if corridor_geoms:
   model_log_html(f"Seasonal migration data processed for {count_with_migration} areas.", "p")
 
-###############################################################################
+#########
 # WEIGHTS
-###############################################################################
-# Weights - required
+#########
+
+# Weights are required
 
 try:
   with open(risk_weights_file, 'r') as f:
@@ -485,9 +481,9 @@ for human_readable_name, csv_factor_name in risk_factor_name_to_csv_column.items
   }
   weights_csv_data.append(row)
 
-###############################################################################
+############################
 # DATA TOTALS (RISK FACTORS)
-###############################################################################
+############################
 
 risk_factor_file_paths = {
   "AgriculturePractices": data_path / "risk_factors" / "agricultural_practices.json",
@@ -628,9 +624,9 @@ for sa in Risk_factor_list:
 if active_risk_factors:
   model_log_html(f"Risk factors included: {', '.join(active_risk_factors)}", "p")
 
-###############################################################################
+############################
 # DATA CLEANING (FILL ZEROS)
-###############################################################################
+############################
 # Sub-admin areas None where they should have zero. Currently, they may have None
 # because zero is implied by the lack of data
 
@@ -656,11 +652,12 @@ for sa in Risk_factor_list:
     if sa.get(factor) is None:
       sa[factor] = 0
 
-###############################################################################
+###########################################################################
 # CERVID HOME RANGES (loaded here; also used by the distance section below)
-###############################################################################
-# Home range data must be available before the adjusted distance calculation
-# because each subadmin geometry is buffered by its max home range distance.
+###########################################################################
+
+# Each subadmin geometry is buffered by its max home range distance before
+# the adjusted distance is calculated. Home Range data are optional.
 
 logging.info("Processing cervid home range data...")
 home_ranges_data = []
@@ -689,26 +686,25 @@ else:
   logging.info("cervid_home_range_size.ndJson not provided. No home range buffering will be applied to subadmin geometries.")
   model_log_html("Cervid home range file not provided. Subadmin areas will not be buffered for distance calculations.", "p")
 
-###############################################################################
-# ADJUSTED DISTANCE CALCULATIONS (PROXIMITY ANALYSIS)
-###############################################################################
+###############################################################
+# PROXIMITY TO CWD CALCULATIONS (Adjusted Distance Calculation)
+###############################################################
+
 # For each sub-administrative area, calculate the shortest distance (km) from
 # its *modified* geometry to the nearest CWD-positive sub-administrative area.
 #
 # Modified geometry construction:
 #   1. Project the subadmin polygon to North America Albers Equal Area Conic
 #      (EPSG:102008), which preserves distances accurately at the continental
-#      scale and avoids the latitude-dependent distortion of buffering in
-#      geographic degrees.
+#      scale.
 #   2. Buffer the projected polygon outward by the species' max home range
-#      distance (km → metres) for that area.
+#      distance (km → meters) for that area (determined above).
 #   3. Union in any migration corridor polygons (also projected) that intersect
 #      the buffered geometry, extending the effective reach along corridor paths.
 #   4. Reproject the modified geometry back to WGS-84 (EPSG:4326).
-#
-# Distance is then measured geodesically (via pyproj Geod) from the edge of
-# the modified WGS-84 geometry to the nearest CWD-positive subadmin polygon
-# (fetched from PostgreSQL, filtered by current_cwd_status = 1).
+#   5. Distance is then measured geodesically (via pyproj Geod) from the edge of
+#      the modified WGS-84 geometry to the nearest CWD-positive subadmin polygon
+#      (fetched from PostgreSQL, filtered by current_cwd_status = 1).
 #
 # If no CWD-positive polygons exist in the database the distance is recorded
 # as None (written as "NA" in the CSV) — not zero — because zero would
@@ -754,8 +750,8 @@ except Exception as e:
 
 # ---------------------------------------------------------------------------
 # Projection setup
-# EPSG:102008 – North America Albers Equal Area Conic.
-# All buffering is performed in this projection (units: metres) so that the
+# EPSG:102008 – North America Albers Equal Area Conic
+# All buffering is performed in this projection (units: meters) so that the
 # buffer radius is the same physical distance regardless of latitude.
 # Geometries are reprojected back to WGS-84 for the geodesic distance step.
 # ---------------------------------------------------------------------------
@@ -766,16 +762,15 @@ def project(geom, transformer):
   """Reprojects a Shapely geometry using a pyproj Transformer."""
   return transform(transformer.transform, geom)
 
-# Pre-project all corridor geometries once so we don't repeat the work inside
-# the per-subadmin loop.
+# Pre-project all corridor geometries to Albers
 corridor_geoms_Albers = [project(c, to_Albers) for c in corridor_geoms]
 corridor_tree = STRtree(corridor_geoms_Albers)
 
-# Positive area polygons remain in WGS-84 for the geodesic distance step.
-# Build a spatial index for fast nearest-neighbour queries.
+# Positive area polygons remain in WGS-84 for the geodesic distance step
+# Build a spatial index for fast nearest-neighbor queries
 positive_area_tree = STRtree(positive_area_geoms) if positive_area_geoms else STRtree([])
 
-# Organise all subadmin geometries for iteration.
+# Organize all subadmin geometries for iteration
 subadmin_geoms = []
 for area in all_subadmin_areas:
   subadmin_geoms.append(
@@ -794,9 +789,9 @@ for subadmin in subadmin_geoms:
   base_wgs = subadmin['geom']  # WGS-84
 
   # ------------------------------------------------------------------
-  # Step 1 – Project to Albers and buffer by the max home range (metres).
+  # Step 1 – Project to Albers and buffer by the max home range (meters).
   # If no home range is available for this area the polygon is used as-is
-  # (zero-metre buffer leaves the geometry unchanged).
+  # (zero-meter buffer leaves the geometry unchanged).
   # ------------------------------------------------------------------
   home_range_km = max_home_range.get(sa_id, 0) or 0
   home_range_m  = home_range_km * 1000
@@ -806,7 +801,7 @@ for subadmin in subadmin_geoms:
 
   # ------------------------------------------------------------------
   # Step 2 – Union in any migration corridors (Albers) that intersect
-  # the buffered geometry, extending the effective reach along corridors.
+  # the buffered geometry, extending the effective reach along corridors
   # ------------------------------------------------------------------
   if corridor_geoms_Albers:
     candidate_indices = corridor_tree.query(buffered_Albers)
@@ -816,6 +811,7 @@ for subadmin in subadmin_geoms:
       if corridor_geoms_Albers[idx].intersects(buffered_Albers)
     ]
     modified_Albers = (
+      # merge geometries into a single geometry by dissolving all overlapping or touching boundaries
       unary_union([buffered_Albers] + touching_corridors)
       if touching_corridors
       else buffered_Albers
@@ -825,12 +821,12 @@ for subadmin in subadmin_geoms:
 
   # ------------------------------------------------------------------
   # Step 3 – Reproject the modified geometry back to WGS-84, then
-  # measure the geodesic distance to the nearest positive area polygon.
+  # measure the geodesic distance to the nearest positive area.
   # positive_area_geoms is guaranteed non-empty at this point — execution
   # halts above if the database returns no CWD-positive polygons.
   # ------------------------------------------------------------------
   modified_wgs = project(modified_Albers, from_Albers)
-  nearest_idx  = positive_area_tree.query_nearest(modified_wgs)[0]
+  nearest_idx  = positive_area_tree.query_nearest(modified_wgs)[0] # find the nearest geometry
   nearest_positive_geom = positive_area_geoms[nearest_idx]
   connecting_line = shortest_line(modified_wgs, nearest_positive_geom)
   dist_meters = geod.geometry_length(connecting_line)
@@ -844,19 +840,7 @@ for subadmin in subadmin_geoms:
 logging.info("Adjusted distance calculations complete.")
 model_log_html("Adjusted proximity distances to CWD-positive areas calculated.", "p")
 
-###############################################################################
-# CERVID MOVEMENT (HOME RANGES) — output list
-###############################################################################
-# max_home_range was built above (before the distance section). This block
-# uses it to populate the AverageMovement.csv output list only.
 
-# Create Movement dictionaries
-movement_list = copy.deepcopy(subadmin_list)
-
-for sa in movement_list:
-  sa['AverageMovement'] = max_home_range.get(sa.get('SubAdminID'))
-
-model_log_html("Cervid home range data processed.", "p")
 
 
 ###############################################################################
@@ -971,17 +955,6 @@ with open(data_path / "AdjustedDistance.csv", 'w', newline='') as f:
   writer.writeheader()
   writer.writerows(replace_none_with_na(adjusted_distances))
 
-# Write to Movement.csv
-with open(data_path / "AverageMovement.csv", 'w', newline='') as f:
-  writer = csv.DictWriter(
-    f,
-    # quoting=csv.QUOTE_NONNUMERIC,
-    fieldnames=["SubAdminID","FullName", "AverageMovement"],
-    extrasaction='ignore',
-    restval="NA")
-  writer.writeheader()
-  writer.writerows(replace_none_with_na(movement_list))
-
 # Write to CWD_Transition_Probability.csv
 with open(data_path / "CWD_Transition_Probability.csv", 'w', newline='') as f:
   fieldnames = ["year", "county", "positive", "dist_1", "closest_bin3", "transition_prob", "pos_prob"]
@@ -1010,15 +983,15 @@ model_log_html("Model input files (CSVs) generated successfully.", "p")
 #         json.dump(geojson, f)
 #     logging.info(f"Exported GeoJSON to {output_path}")
 
-# # 1. Positive Locations
+# # 1. Positive Areas (CWD-positive subadmin polygons)
 # positive_features = []
-# for i, geom in enumerate(positive_location_geoms):
+# for i, geom in enumerate(positive_area_geoms):
 #     positive_features.append({
 #         "type": "Feature",
-#         "properties": {"id": i, "label": "Positive Location"},
+#         "properties": {"id": i, "label": "Positive Area"},
 #         "geometry": mapping(geom)
 #     })
-# export_to_geojson(positive_features, data_path / "positive_locations.geojson")
+# export_to_geojson(positive_features, data_path / "positive_areas.geojson")
 
 # # 2. Migration Corridors
 # migration_features = []
@@ -1030,7 +1003,7 @@ model_log_html("Model input files (CSVs) generated successfully.", "p")
 #     })
 # export_to_geojson(migration_features, data_path / "migration_corridors.geojson")
 
-# # 3. Subadmin Areas
+# # 3. Subadmin Areas (base polygons)
 # subadmin_features = []
 # for sa in subadmin_geoms:
 #     subadmin_features.append({
@@ -1039,5 +1012,33 @@ model_log_html("Model input files (CSVs) generated successfully.", "p")
 #         "geometry": mapping(sa['geom'])
 #     })
 # export_to_geojson(subadmin_features, data_path / "subadmin_areas.geojson")
+
+# # 4. Adjusted Subadmin Areas (buffered by home range + migration corridors unioned in)
+# # Note: reprojected back to WGS-84 for export.
+# adjusted_subadmin_features = []
+# for subadmin in subadmin_geoms:
+#     sa_id = subadmin['_id']
+#     base_wgs = subadmin['geom']
+#     home_range_km = max_home_range.get(sa_id, 0) or 0
+#     home_range_m = home_range_km * 1000
+#     base_albers = project(base_wgs, to_Albers)
+#     buffered_albers = base_albers.buffer(home_range_m) if home_range_m > 0 else base_albers
+#     if corridor_geoms_Albers:
+#         candidate_indices = corridor_tree.query(buffered_albers)
+#         touching_corridors = [
+#             corridor_geoms_Albers[idx]
+#             for idx in candidate_indices
+#             if corridor_geoms_Albers[idx].intersects(buffered_albers)
+#         ]
+#         modified_albers = unary_union([buffered_albers] + touching_corridors) if touching_corridors else buffered_albers
+#     else:
+#         modified_albers = buffered_albers
+#     modified_wgs = project(modified_albers, from_Albers)
+#     adjusted_subadmin_features.append({
+#         "type": "Feature",
+#         "properties": {"SubAdminID": sa_id, "FullName": subadmin['full_name']},
+#         "geometry": mapping(modified_wgs)
+#     })
+# export_to_geojson(adjusted_subadmin_features, data_path / "subadmin_areas_adjusted.geojson")
 
 # model_log_html("Input processing complete. Handing off to hazard model.", "p")
