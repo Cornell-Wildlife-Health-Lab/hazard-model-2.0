@@ -29,6 +29,8 @@ attachments_json_path = data_path / "attachments.json"
 logging_path = data_path / "attachments" / "execution_log.log"
 model_output_path = data_path / "attachments" / "OutputHazards.csv"
 weights_csv_path = data_path / "Weights.csv"
+data_totals_csv_path = data_path / "DataTotals.csv"
+adjusted_distance_csv_path = data_path / "AdjustedDistance.csv"
 
 ###################
 # Functions
@@ -145,26 +147,96 @@ try:
             if col in row:
                 row[col] = None
 
-    # Identify numeric keys automatically, excluding protected metadata
-    protected_keys = {"FullName", "SubAdminID"}
-    float_keys = [k for k in model_output_dict_list[0].keys() if k not in protected_keys]
+    # -------------------------------------------------------------------------
+    # Load input parameter files for joining to output records
+    # -------------------------------------------------------------------------
 
-    # Perform data type conversion and rounding (to 4 decimal places)
-    for each_row in model_output_dict_list:
+    # Load DataTotals.csv (risk factor input values per subadmin area)
+    data_totals_by_id = {}
+    if data_totals_csv_path.exists():
+        with open(data_totals_csv_path, 'r') as f:
+            for row in csv.DictReader(f):
+                sa_id = row.get('SubAdminID')
+                if sa_id:
+                    # Exclude SubAdminID and FullName — already present in output
+                    data_totals_by_id[sa_id] = {
+                        k: v for k, v in row.items()
+                        if k not in ('SubAdminID', 'FullName')
+                    }
+        logging.info(f"Loaded DataTotals for {len(data_totals_by_id)} subadmin areas.")
+    else:
+        logging.warning("DataTotals.csv not found. Input risk factor values will not be included in output.")
+
+    # Load AdjustedDistance.csv (proximity to nearest CWD-positive area)
+    adjusted_distance_by_id = {}
+    if adjusted_distance_csv_path.exists():
+        with open(adjusted_distance_csv_path, 'r') as f:
+            for row in csv.DictReader(f):
+                sa_id = row.get('SubAdminID')
+                if sa_id:
+                    adjusted_distance_by_id[sa_id] = row.get('AdjustedDistance')
+        logging.info(f"Loaded AdjustedDistance for {len(adjusted_distance_by_id)} subadmin areas.")
+    else:
+        logging.warning("AdjustedDistance.csv not found. Proximity values will not be included in output.")
+
+    # -------------------------------------------------------------------------
+    # Build enriched records with inputs first, then model outputs
+    # Column order: SubAdminID, FullName, AdjustedDistance, risk factor inputs,
+    #               then all model output columns (hazard scores, elasticities)
+    # -------------------------------------------------------------------------
+    enriched_output_list = []
+    # Determine output-only keys (excluding the metadata keys present in all rows)
+    metadata_keys = ['SubAdminID', 'FullName']
+    output_only_keys = [k for k in model_output_dict_list[0].keys() if k not in metadata_keys]
+
+    for row in model_output_dict_list:
+        sa_id = row.get('SubAdminID')
+        enriched_row = {}
+        # 1. Metadata
+        enriched_row['SubAdminID'] = row.get('SubAdminID')
+        enriched_row['FullName'] = row.get('FullName')
+        # 2. Proximity input
+        enriched_row['AdjustedDistance'] = adjusted_distance_by_id.get(sa_id)
+        # 3. Risk factor inputs from DataTotals
+        if sa_id in data_totals_by_id:
+            enriched_row.update(data_totals_by_id[sa_id])
+        # 4. Model output columns
+        for k in output_only_keys:
+            enriched_row[k] = row.get(k)
+        enriched_output_list.append(enriched_row)
+
+    # -------------------------------------------------------------------------
+    # Identify numeric keys and perform type conversion / rounding
+    # -------------------------------------------------------------------------
+    protected_keys = {'FullName', 'SubAdminID'}
+    float_keys = [k for k in enriched_output_list[0].keys() if k not in protected_keys]
+
+    for each_row in enriched_output_list:
         for each_key in float_keys:
             val = safely_convert_float(each_row[each_key])
             each_row[each_key] = round(val, 4) if val is not None else None
 
-    # Write to JSON file for platform integration
+    # -------------------------------------------------------------------------
+    # Write outputs
+    # -------------------------------------------------------------------------
+
+    # Write to output.json for platform integration
     model_output_json_path = data_path / "attachments" / "output.json"
     with open(model_output_json_path, 'w', newline='') as f:
-        json.dump(model_output_dict_list, f, indent=3)
-        
-    # Add output.json to the attachments list manifest
+        json.dump(enriched_output_list, f, indent=3)
     attachment = {"filename": "output.json", "content_type": "application/json", "role": "primary"}
     add_item_to_json_file_list(attachments_json_path, attachment)
-    
-    logging.info("Post-processing complete. output.json created.")
+
+    # Write to OutputHazards.csv
+    output_csv_path = data_path / "attachments" / "OutputHazards.csv"
+    with open(output_csv_path, 'w', newline='') as f:
+        writer = csv.DictWriter(f, fieldnames=enriched_output_list[0].keys(), restval='NA')
+        writer.writeheader()
+        writer.writerows(enriched_output_list)
+    attachment = {"filename": "OutputHazards.csv", "content_type": "text/csv", "role": "downloadable"}
+    add_item_to_json_file_list(attachments_json_path, attachment)
+
+    logging.info("Post-processing complete. output.json and OutputHazards.csv created.")
     model_log_html("Model exports successfully created.", "p")
 
 except Exception as e:
