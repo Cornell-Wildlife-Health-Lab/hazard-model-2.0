@@ -466,7 +466,3 @@ add_item_to_json_array=function(file_path, new_item) {
 	  # Write the file to the attachments directory so it can be picked up by the next script
 	  output_csv_path = file.path("", "data", "attachments", "OutputHazards.csv")
 	  write.csv(OutputHazards_CompleteCases, output_csv_path, row.names = FALSE)
-	  
-	  # Register the attachment in the JSON manifest
-	  attachment_metadata = c(filename="OutputHazards.csv", content_type="text/csv", role="downloadable")
-	  add_item_to_json_array(json_attachment_file, attachment_metadata)
