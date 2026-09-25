@@ -461,7 +461,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	  line="The data frame was successfully generated for all subadministrative areas."
 	  write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE)}
 	
-# WRITE THE FILES BACK TO THE WAREHOUSE. -----------------
+# WRITE THE OUTPUT FILE. -----------------
 	OutputHazards_CompleteCases=OutputHazards[complete.cases(OutputHazards),]
 	  # Write the file to the attachments directory so it can be picked up by the next script
 	  output_csv_path = file.path("", "data", "attachments", "OutputHazards.csv")
