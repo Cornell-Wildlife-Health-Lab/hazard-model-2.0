@@ -857,7 +857,7 @@ try:
     database=pg_database)
   cur = conn.cursor()
   # Select specific columns to match the required CSV structure for the R script
-  cur.execute('SELECT "year", "county", "positive", "dist_1", "closest_bin", "transition_prob", "pos_prob" FROM "admin_areas"."subadmin_areas_cwd_transition_probability"')
+  cur.execute('SELECT "year", "county", "positive", "dist_1", "closest_bin", "transition_prob" FROM "admin_areas"."subadmin_areas_cwd_transition_probability"')
   columns = [desc[0] for desc in cur.description]
   rows = cur.fetchall()
   logging.info(f"Fetched {len(rows)} rows from database.")
@@ -957,7 +957,7 @@ with open(data_path / "AdjustedDistance.csv", 'w', newline='') as f:
 
 # Write to CWD_Transition_Probability.csv
 with open(data_path / "CWD_Transition_Probability.csv", 'w', newline='') as f:
-  fieldnames = ["year", "county", "positive", "dist_1", "closest_bin", "transition_prob", "pos_prob"]
+  fieldnames = ["year", "county", "positive", "dist_1", "closest_bin", "transition_prob"]
   writer = csv.DictWriter(
     f,
     fieldnames=fieldnames,
