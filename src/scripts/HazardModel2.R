@@ -377,8 +377,8 @@ add_item_to_json_array=function(file_path, new_item) {
 	  
 	  # Compute the Baseline Per Spatial Cell. 
 	  FRAME=read.csv("/data/CWD_Transition_Probability.csv")
-	  model=lm(transition_prob~dist_1,data=FRAME)
-	  distance=data.frame(dist_1=Distance[i])
+	  model=lm(transition_prob~dist,data=FRAME)
+	  distance=data.frame(dist=Distance[i])
 	  BaselinePerCell[i]=as.numeric(max(0,predict(model,newdata=distance)))
 	  
 	  # Compute the Total Risk Per Spatial Cell. 
