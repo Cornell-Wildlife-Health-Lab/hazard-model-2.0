@@ -11,16 +11,16 @@
 # Licence: MIT
 #
 # This code corresponds to the work by Thompson et al.
-# 
-# This code was written under: 
+#
+# This code was written under:
 # R version 4.4.1 (2024-06-14 ucrt) -- "Race for Your Life"
 # Copyright (C) 2024 The R Foundation for Statistical Computing
 # Platform: x86_64-w64-mingw32/x64
-# 
+#
 #_______________________________________________________________________________
 
-# Load packages. ------------ 
-	library(dplyr)
+# Load packages. ------------
+library(dplyr)
 
 # Reusable Functions
 html_tag_line <- function(text, tag = "p") {
@@ -193,22 +193,22 @@ add_item_to_json_array=function(file_path, new_item) {
 	
 # 3. ADJUSTED DISTANCE FILE --------------------------------------
 	
-	# Read in the (Required) adjusted distance file. 	
-	AdjustedDistance_filepath=file.path("","data","AdjustedDistance.csv")
-	AdjustedDistance=readr::read_csv(AdjustedDistance_filepath,show_col_types = FALSE) 
-	#AdjustedDistance=readr::read_csv("AdjustedDistance.csv")
+	# Read in the (Required) effective distance file. 	
+	EffectiveDistance_filepath=file.path("","data","EffectiveDistance.csv")
+		EffectiveDistance=readr::read_csv(EffectiveDistance_filepath,show_col_types = FALSE) 
+	#EffectiveDistance=readr::read_csv("EffectiveDistance.csv")
 	
 	# Formatting the movement file. 
-	Cleaned_AdjustedDistance=as.data.frame(cbind(AdjustedDistance$SubAdminID,AdjustedDistance$AdjustedDistance))
-	colnames(Cleaned_AdjustedDistance)=c("SubAdminID","AdjustedDistance")
+		Cleaned_EffectiveDistance=as.data.frame(cbind(EffectiveDistance$SubAdminID,EffectiveDistance$EffectiveDistance))
+	colnames(Cleaned_EffectiveDistance)=c("SubAdminID","EffectiveDistance")
 	
-	# Check. Make sure that there are no NAs in the AdjustedDistance file. 
-	Cleaned_AdjustedDistance[is.na(Cleaned_AdjustedDistance)]=0
+	# Check. Make sure that there are no NAs in the EffectiveDistance file. 
+	Cleaned_EffectiveDistance[is.na(Cleaned_EffectiveDistance)]=0
 	
-	# Check. Make sure all AdjustedDistances are positive. 
-	Cleaned_AdjustedDistance[Cleaned_AdjustedDistance<0]=0
+	# Check. Make sure all EffectiveDistances are positive. 
+	Cleaned_EffectiveDistance[Cleaned_EffectiveDistance<0]=0
 	
-	# The cleaned AdjustedDistance file is now named Cleaned_AdjustedDistance.
+	# The cleaned EffectiveDistance file is now named Cleaned_EffectiveDistance.
 	
 # 4. DATA TOTALS FILE ---------------------------------------------
 	
@@ -314,16 +314,16 @@ add_item_to_json_array=function(file_path, new_item) {
 	
 	# We will now scale dispersal (column #21). 
 	# Dispersal matters fully (i.e., has a value of 1) if a single animal can arrive from the nearest known infection. 
-	# Thus, if dispersal is greater than or equal to the adjusted distance, then the cleaned dispersal value will be set to 1.
-	# Whereas if dispersal is less than the adjusted distance, then the value will be scaled to the proportion of the distance covered. 
+	# Thus, if dispersal is greater than or equal to the effective distance, then the cleaned dispersal value will be set to 1.
+	# Whereas if dispersal is less than the effective distance, then the value will be scaled to the proportion of the distance covered. 
 	for (k in 1:NumSubAreas){
 	  y=as.numeric(Cleaned_DataTotals[k,21])
 	  if (is.na(y)){Cleaned_DataTotals[k,21]=NA}else{
 	    # If the hosts can go farther than the distance to the nearest, then the risk factor is set to maximum. 
-	    if (y>=as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])){Cleaned_DataTotals[k,21]=1
+	    if (y>=as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])){Cleaned_DataTotals[k,21]=1
 	    }else{
 	      # If the host only go a portion of the distance to nearest, then the risk factor is set to the proportion of the distance.
-	      if (as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])==0){Cleaned_DataTotals[k,21]=0}else{Cleaned_DataTotals[k,21]=as.numeric(Cleaned_DataTotals[k,21])/as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])}
+	      if (as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])==0){Cleaned_DataTotals[k,21]=0}else{Cleaned_DataTotals[k,21]=as.numeric(Cleaned_DataTotals[k,21])/as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])}
 	      }
 	  }}
 	# Now that the units are consistent, we will scale the entire vector to one. 
@@ -337,10 +337,10 @@ add_item_to_json_array=function(file_path, new_item) {
 	  y=as.numeric(Cleaned_DataTotals[k,22])
 	  if (is.na(y)){Cleaned_DataTotals[k,22]=NA}else{
 	    # If the herds move farther than the distance to the nearest, then the risk factor is set to maximum.
-	    if (y>=as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])){Cleaned_DataTotals[k,22]=1
+	    if (y>=as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])){Cleaned_DataTotals[k,22]=1
 	    }else{
 	      # If the herds only go a portion of the distance to nearest, then the risk factor is set to the proportion of the distance.
-	      if(as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])==0){Cleaned_DataTotals[k,22]=0}else{Cleaned_DataTotals[k,22]=as.numeric(Cleaned_DataTotals[k,22])/as.numeric(Cleaned_AdjustedDistance$AdjustedDistance[k])}
+	      if(as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])==0){Cleaned_DataTotals[k,22]=0}else{Cleaned_DataTotals[k,22]=as.numeric(Cleaned_DataTotals[k,22])/as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])}
 	      }
 	  }}
 	# Now that the units are consistent, we will scale the entire vector to one. 
@@ -350,8 +350,8 @@ add_item_to_json_array=function(file_path, new_item) {
 
 # FOLD DATA STREAMS TOGETHER ------------------------------------------------
 	
-# Join cleaned adjusted distance data to SubAdmin ID. 	
-	SubAdmin_Distance=left_join(Subadmin,Cleaned_AdjustedDistance,by=c("SubAdminID"))	
+# Join cleaned effective distance data to SubAdmin ID. 	 	
+	SubAdmin_Distance=left_join(Subadmin,Cleaned_EffectiveDistance,by=c("SubAdminID"))	
 	
 # Now join the cleaned data total table to SubAdmin ID. 
 	SubAdmin_Data=left_join(SubAdmin_Distance,Cleaned_DataTotals,by=c("SubAdminID","FullName"))
@@ -373,7 +373,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	# Loop through all i spatial cells to find the measures of center. 
 	for (i in 1:FullNumberAreas){
 	  
-	  Distance=as.numeric(SubAdmin_Data$AdjustedDistance)
+	  Distance=as.numeric(SubAdmin_Data$EffectiveDistance)
 	  
 	  # Compute the Baseline Per Spatial Cell. 
 	  FRAME=read.csv("/data/CWD_Transition_Probability.csv")
@@ -386,7 +386,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	  
 	  # Get the weights to be used per spatial cell. 
 	  UsedWeights=c()
-	  if(Cleaned_AdjustedDistance$AdjustedDistance[i]==0){UsedWeights=Weights$WeightNear}else{UsedWeights=Weights$WeightFar}
+	  if(Cleaned_EffectiveDistance$EffectiveDistance[i]==0){UsedWeights=Weights$WeightNear}else{UsedWeights=Weights$WeightFar}
 	  
 	  WeightVector=as.numeric(UsedWeights) # 20 element vector with all numbers.
 	  

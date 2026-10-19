@@ -30,7 +30,7 @@ Inputs:
     waterbodies.json
     wildlife_rehabilitation_facilities.json
 Outputs:
-  AdjustedDistance.csv
+  EffectiveDistance.csv
   CWD_Transition_Probability.csv
   DataTotals.csv
   Subadmin.csv
@@ -45,12 +45,12 @@ import sys
 import os
 from pathlib import Path
 import json
-import pathlib
 import csv
 import logging
 import datetime
 import psycopg2
-from shapely.geometry import shape, mapping, MultiPoint, Point
+import copy
+from shapely.geometry import shape, mapping
 from shapely.ops import unary_union, transform
 from shapely import STRtree, shortest_line
 from pyproj import Geod, Transformer
@@ -72,6 +72,7 @@ risk_weights_file = data_path / 'risk_weights.json'
 seasonal_migration_file_path = data_path / 'seasonal_migration.json'
 subadmins_file_path = data_path / 'sub_administrative_area.ndJson'
 home_range_file_path = data_path / 'cervid_home_range_size.ndJson'
+samples_file_path = data_path / 'sample.ndJson'
 model_metadata_log_file = data_path / 'attachments' / 'info.html'
 logging_path = data_path / 'attachments' / 'execution_log.log'
 attachments_json_path = data_path / 'attachments.json'
@@ -243,7 +244,7 @@ def add_item_to_json_file_list(file_path, new_item):
 # SETUP FILE STRUCTURE
 
 # Ensure the directory for logs and HTML feedback exists.
-os.makedirs(os.path.dirname(pathlib.Path(model_metadata_log_file)), exist_ok=True)
+os.makedirs(os.path.dirname(model_metadata_log_file), exist_ok=True)
 
 # Initialize attachments.json as an empty list.
 # This file acts as a manifest for all files the platform should recognize as outputs.
@@ -269,7 +270,7 @@ add_item_to_json_file_list(attachments_json_path, attachment)
 # SETUP LOGGING
 
 # Create log file including any parent folders (if they don't already exist)
-os.makedirs(os.path.dirname(pathlib.Path(logging_path)), exist_ok=True)
+os.makedirs(os.path.dirname(logging_path), exist_ok=True)
 
 logging.basicConfig(level = logging.DEBUG,
                     filename = logging_path,
@@ -283,7 +284,7 @@ def handle_uncaught_exception(type, value, traceback):
 sys.excepthook = handle_uncaught_exception
 
 # Initialize the HTML feedback log
-open(pathlib.Path(model_metadata_log_file), 'w').close() # Clear model log file contents if necessary.
+open(model_metadata_log_file, 'w').close() # Clear model log file contents if necessary.
 model_log_html("Model Execution Summary", "h3")
 model_log_html("Model: Hazard Risk Model 2")
 model_log_html('Date: ' + datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S") + ' GMT', "p")
@@ -303,7 +304,7 @@ with open(subadmins_file_path, 'r', encoding='utf-8') as f:
     if line.strip():
       all_subadmin_areas.append(json.loads(line))
 logging.info(f"Loaded {len(all_subadmin_areas)} sub-administrative areas from geographic data.")
-subadmin_id_to_code = {area['_id']: area.get('code') for area in all_subadmin_areas}
+
 model_log_html("Base geographic sub-administrative area data loaded.", "p")
 
 ##################
@@ -314,7 +315,7 @@ logging.info("Loading model parameters...")
 
 try:
   # Load the master configuration for the current model run
-  with open(pathlib.Path(parameters_file), 'r') as f:
+  with open(parameters_file, 'r') as f:
     params = json.load(f)
     logging.info("Parameters json file loaded successfully")
 except:
@@ -330,24 +331,151 @@ provider_admin_area = params['_provider']['_administrative_area']['administrativ
 model_log_html(f"Provider geographic focus: {provider_admin_area}", "p")
 del(params['_provider'])
 
-# Get sub-administrative areas for modeling
+###############################################################################
+# CWD STATUS
+###############################################################################
+# Calculated first because CWD Status determines which subadmin areas are
+# selected for modeling (only areas without Detected CWD are passed to the R model).
+# Results cover ALL subadmin areas and are written to CWDStatus.csv.
+#
+# CWD Status: "Detected" if any qualifying sample has a Detected result.
+# Only the test with selected_definitive=True is used per sample.
+# Samples without a subadmin area are skipped.
+logging.info("Processing CWD status from sample data...")
+# Retrieve the season-year filter from params.
+# If no years are provided, all samples are included.
+surveillance_params = params.get('surveillance_planning', {})
+presence_years = set(surveillance_params.get('cwd_presence', []))
+logging.info(f"CWD presence years: {presence_years}")
+# {subadmin_id: True} — True if any Detected result found in qualifying samples
+cwd_detected_ids = set()
+if samples_file_path.exists():
 
-logging.info(f"Identifying sub-administrative aras for modeling...")
+  with open(samples_file_path, 'r', encoding='utf-8') as f:
+    for line in f:
+      if not line.strip():
+        continue
+      sample = json.loads(line)
 
-subadmin_list = []
+      # Skip samples with no subadmin area
+      sa_info = sample.get('_sub_administrative_area')
+      if not sa_info:
+        continue
+      sa_id = sa_info.get('_id')
+      if not sa_id:
+        continue
 
-for _subadmin_id in params['_sub_administrative_areas']:
-  subadmin_dict = {}
-  subadmin_dict['SubAdminID'] = _subadmin_id
+      season_year = sample.get('season_year')
 
-  # Match ID to the full record to extract human-readable names
-  for subadmin_area in all_subadmin_areas:
-    if subadmin_area.get('_id') == _subadmin_id:
-      subadmin_dict['FullName'] = subadmin_area.get('full_name')
-      continue
-  subadmin_list.append(subadmin_dict)
+      # Find the selected definitive test
+      definitive_result = None
+      for test in sample.get('tests', []):
+        if test.get('selected_definitive') is True:
+          definitive_result = test.get('result')
+          break
 
-model_log_html(f"Preparing model data for {len(subadmin_list)} sub-administrative areas.", "p")
+      # Only Detected results are relevant for CWD status
+      if definitive_result != 'Detected':
+        continue
+
+      # Filter by presence_years if provided, otherwise include all years
+      if not presence_years or season_year in presence_years:
+        cwd_detected_ids.add(sa_id)
+
+  logging.info(f"CWD detected in {len(cwd_detected_ids)} subadmin areas.")
+  model_log_html("CWD status calculated from sample data.", "p")
+else:
+  logging.warning("sample.ndJson not found. CWD status will not be calculated.")
+  model_log_html("WARNING: sample.ndJson not found. CWD status not calculated.", "p")
+
+# Build CWD status lookup and status rows for all subadmin areas
+cwd_status_by_id = {}  # {subadmin_id: 'Detected' | None}
+cwd_status_rows = []
+for area in all_subadmin_areas:
+  sa_id = area['_id']
+
+  # CWD Status: Detected if any qualifying sample was Detected, else None.
+  if sa_id in cwd_detected_ids:
+    status = 'Detected'
+  else:
+    status = None
+
+  cwd_status_by_id[sa_id] = status
+
+  # Surveillance category: "monitoring" if Detected, "early detection" otherwise.
+  # If no cwd_presence years provided, all samples included; areas with no
+  # Detected samples get None status and are assigned "early detection".
+  surveillance_category = 'monitoring' if status == 'Detected' else 'early detection'
+
+  cwd_status_rows.append({
+    'SubAdminID': sa_id,
+    'FullName': area.get('full_name'),
+    'CWDStatus': status,
+    'SurveillanceCategory': surveillance_category
+  })
+
+
+# Write CWDStatus.csv
+with open(data_path / 'CWDStatus.csv', 'w', newline='') as f:
+  writer = csv.DictWriter(
+    f,
+    fieldnames=['SubAdminID', 'FullName', 'CWDStatus', 'SurveillanceCategory'])
+  writer.writeheader()
+  writer.writerows(cwd_status_rows)
+logging.info("CWDStatus.csv written successfully.")
+
+################
+# SELECTED AREAS
+################
+# Areas selected for modeling are those with CWD Status of "Not Detected".
+# Areas with "Detected" or no status (no samples) are excluded from the R model.
+
+logging.info("Identifying sub-administrative areas for modeling (surveillance category: early detection)...")
+selected_subadmin_ids = {
+  row['SubAdminID'] for row in cwd_status_rows
+  if row['SurveillanceCategory'] == 'early detection'
+}
+selected_subadmin_areas = [
+  area for area in all_subadmin_areas
+  if area['_id'] in selected_subadmin_ids
+]
+
+# Build the subadmin list with ID and human-readable name for CSV output
+subadmin_list = [
+  {'SubAdminID': area['_id'], 'FullName': area.get('full_name')}
+  for area in selected_subadmin_areas
+]
+
+# Map selected subadmin IDs to their area codes for database lookups
+subadmin_id_to_code = {area['_id']: area.get('code') for area in selected_subadmin_areas}
+
+model_log_html(f"Preparing model data for {len(subadmin_list)} sub-administrative areas with surveillance category 'early detection'.", "p")
+
+# Initialise the geodesic calculator here — needed for both area calculation
+# below and distance/migration calculations later.
+geod = Geod(ellps="WGS84")
+
+# Build geometry list for ALL subadmin areas — used to calculate area (km²)
+# for demographic weight conversion (density → population). The area_km2 value
+# is stored per area and written to SubadminAreas.csv for use in output processing.
+# The migration corridor and effective distance loops below use only selected areas.
+subadmin_geoms_all = []
+for area in all_subadmin_areas:
+  geom = shape(area["boundary"]["geometry"])
+  area_m2 = abs(geod.geometry_area_perimeter(geom)[0])  # returns (area_m2, perimeter_m)
+  area_km2 = area_m2 / 1_000_000
+  subadmin_geoms_all.append({
+    '_id': area['_id'],
+    'full_name': area.get('full_name', ''),
+    'geom': geom,  # WGS-84
+    'area_km2': round(area_km2, 4)
+  })
+
+# Lookup for area_km2 by subadmin ID — used in output processing
+subadmin_area_km2 = {s['_id']: s['area_km2'] for s in subadmin_geoms_all}
+
+# Filtered geometry list for selected areas only — used for migration and distance calculations
+subadmin_geoms = [s for s in subadmin_geoms_all if s['_id'] in selected_subadmin_ids]
 
 #####################
 # MIGRATION CORRIDORS
@@ -357,7 +485,6 @@ model_log_html(f"Preparing model data for {len(subadmin_list)} sub-administrativ
 # infected areas.
 
 logging.info("Processing seasonal migration corridors...")
-geod = Geod(ellps="WGS84")
 corridor_geoms = []
 
 if seasonal_migration_file_path.exists():
@@ -383,10 +510,9 @@ else:
 # 3. Save as kilometers for use in the hazard calculations.
 
 max_migration_distances = {}
-# Create a mapping for subadmin geometries for faster lookup
-subadmin_geom_map = {area['_id']: shape(area["boundary"]["geometry"]) for area in all_subadmin_areas}
-
-for sa_id, sa_geom in subadmin_geom_map.items():
+for subadmin in subadmin_geoms:
+  sa_id  = subadmin['_id']
+  sa_geom = subadmin['geom']
   # Find corridors that touch/intersect this subadmin
   touching = [c for c in corridor_geoms if c.intersects(sa_geom)]
 
@@ -506,7 +632,6 @@ risk_factor_file_paths = {
 }
 
 # Make a copy of the subadmin_list for a base
-import copy
 Risk_factor_list = copy.deepcopy(subadmin_list)
 
 active_risk_factors = [] # list for logging
@@ -517,7 +642,7 @@ for risk_factor, risk_factor_file_path in risk_factor_file_paths.items():
     # If the file exists, then the user chose to use the factor.
     active_risk_factors.append(risk_factor) # Add to list of used factors for logging
     try: # Open the file and get the values
-      with open(pathlib.Path(risk_factor_file_path), 'r') as f:
+      with open(risk_factor_file_path, 'r') as f:
         risk_scores = json.load(f)
         logging.info(f"{risk_factor} json file loaded successfully")
         for sa in Risk_factor_list:
@@ -534,15 +659,12 @@ for risk_factor, risk_factor_file_path in risk_factor_file_paths.items():
         rf['UserSelection'] = 1
         continue
 
-# Risk Factor: Waterbodies
-if params.get('water_bodies'):
-    active_risk_factors.append("WaterBodies")
-    for rf in weights_csv_data:
-        if rf['RiskFactor'] == "WaterBodies":
-            rf['UserSelection'] = 1
-
 # Waterbodies - Fetch water edge length (km) from PostgreSQL
 if params.get('risk_factors', {}).get('water_bodies'):
+  active_risk_factors.append("WaterBodies")
+  for rf in weights_csv_data:
+    if rf['RiskFactor'] == "WaterBodies":
+      rf['UserSelection'] = 1
   logging.info("Integrating waterbodies data from PostgreSQL...")
   try:
     conn = psycopg2.connect(
@@ -660,25 +782,18 @@ for sa in Risk_factor_list:
 # the adjusted distance is calculated. Home Range data are optional.
 
 logging.info("Processing cervid home range data...")
-home_ranges_data = []
-max_home_range = {}  # {subadmin_id: max_home_range_km}
+max_home_range = {}  # {subadmin_id: home_range_area_km2}
 
 if home_range_file_path.exists():
   with open(home_range_file_path, 'r', encoding='utf-8') as f:
     for line in f:
       if line.strip():
-        home_ranges_data.append(json.loads(line))
-
-  for home_range in home_ranges_data:
-    for sa, area in home_range['data'].items():
-      # Skip null/None values — treat missing home range as unknown (no buffer)
-      if area is None:
-        continue
-      if sa in max_home_range:
-        if area > max_home_range[sa]:
-          max_home_range[sa] = area
-      else:
-        max_home_range[sa] = area
+        for sa, area in json.loads(line)['data'].items():
+          # Skip null/None values — treat missing home range as unknown (no buffer)
+          if area is None:
+            continue
+          if sa not in max_home_range or area > max_home_range[sa]:
+            max_home_range[sa] = area
 
   logging.info(f"Home range data loaded for {len(max_home_range)} subadmin areas.")
   
@@ -770,19 +885,8 @@ corridor_tree = STRtree(corridor_geoms_Albers)
 # Build a spatial index for fast nearest-neighbor queries
 positive_area_tree = STRtree(positive_area_geoms) if positive_area_geoms else STRtree([])
 
-# Organize all subadmin geometries for iteration
-subadmin_geoms = []
-for area in all_subadmin_areas:
-  subadmin_geoms.append(
-    {
-      '_id': area['_id'],
-      'full_name': area.get('full_name', ''),
-      'geom': shape(area["boundary"]["geometry"])  # WGS-84
-    }
-  )
-
-logging.info("Calculating adjusted distances to nearest CWD-positive areas...")
-adjusted_distances = []  # list of {SubAdminID, AdjustedDistance} dicts
+logging.info("Calculating effective distances to nearest CWD-positive areas...")
+effective_distances = []  # list of {SubAdminID, EffectiveDistance} dicts
 
 for subadmin in subadmin_geoms:
   sa_id    = subadmin['_id']
@@ -793,7 +897,10 @@ for subadmin in subadmin_geoms:
   # If no home range is available for this area the polygon is used as-is
   # (zero-meter buffer leaves the geometry unchanged).
   # ------------------------------------------------------------------
-  home_range_km = max_home_range.get(sa_id, 0) or 0
+  home_range_area_km2 = max_home_range.get(sa_id, 0) or 0
+  # Home range size is stored as area (km²). Assuming a circular home range,
+  # derive the radius: r = sqrt(area / pi). Convert km to meters for the Albers projection.
+  home_range_km = (home_range_area_km2 / 3.141592653589793) ** 0.5
   home_range_m  = home_range_km * 1000
 
   base_Albers    = project(base_wgs, to_Albers)
@@ -832,16 +939,13 @@ for subadmin in subadmin_geoms:
   dist_meters = geod.geometry_length(connecting_line)
   adj_dist_km = round(dist_meters / 1000, 2)
 
-  adjusted_distances.append({
-    "SubAdminID":       sa_id,
-    "AdjustedDistance": adj_dist_km
+  effective_distances.append({
+    "SubAdminID":        sa_id,
+    "EffectiveDistance": adj_dist_km
   })
 
-logging.info("Adjusted distance calculations complete.")
-model_log_html("Adjusted proximity distances to CWD-positive areas calculated.", "p")
-
-
-
+logging.info("Effective distance calculations complete.")
+model_log_html("Effective distances to nearest CWD-positive areas calculated.", "p")
 
 ###############################################################################
 # TRANSITION PROBABILITIES
@@ -938,22 +1042,32 @@ with open(data_path / "DataTotals.csv", 'w', newline='') as f:
   writer.writeheader()
   writer.writerows(replace_none_with_na(Risk_factor_list))
 
-# Write AdjustedDistance.csv
-# Fields: SubAdminID, AdjustedDistance (km)
+# Write EffectiveDistance.csv
+# Fields: SubAdminID, EffectiveDistance (km)
 # This is the file read by HazardModel2.R as the per-area proximity input.
-# AdjustedDistance is the geodesic distance from the modified subadmin geometry
+# EffectiveDistance is the geodesic distance from the modified subadmin geometry
 # (base polygon buffered by home range distance in Albers Equal Area projection,
 # then unioned with any intersecting migration corridors) to the edge of the
 # nearest CWD-positive subadmin area polygon. A value of NA indicates that no
 # CWD-positive areas were found in the database for this model run.
-with open(data_path / "AdjustedDistance.csv", 'w', newline='') as f:
+with open(data_path / "EffectiveDistance.csv", 'w', newline='') as f:
   writer = csv.DictWriter(
     f,
-    fieldnames=["SubAdminID", "AdjustedDistance"],
+    fieldnames=["SubAdminID", "EffectiveDistance"],
     restval="NA"
     )
   writer.writeheader()
-  writer.writerows(replace_none_with_na(adjusted_distances))
+  writer.writerows(replace_none_with_na(effective_distances))
+
+# Write SubadminAreas.csv
+# Fields: SubAdminID, AreaKm2
+# Used by output processing to convert deer density to total population.
+with open(data_path / "SubadminAreas.csv", 'w', newline='') as f:
+  writer = csv.DictWriter(
+    f,
+    fieldnames=["SubAdminID", "AreaKm2"])
+  writer.writeheader()
+  writer.writerows([{'SubAdminID': sa_id, 'AreaKm2': area_km2} for sa_id, area_km2 in subadmin_area_km2.items()])
 
 # Write to CWD_Transition_Probability.csv
 with open(data_path / "CWD_Transition_Probability.csv", 'w', newline='') as f:
@@ -967,6 +1081,8 @@ with open(data_path / "CWD_Transition_Probability.csv", 'w', newline='') as f:
   writer.writerows(replace_none_with_na(transition_prob_rows))
 
 model_log_html("Model input files (CSVs) generated successfully.", "p")
+
+
 
 #################################
 # Export GeoJSON Files (Optional)
@@ -1019,7 +1135,8 @@ model_log_html("Model input files (CSVs) generated successfully.", "p")
 # for subadmin in subadmin_geoms:
 #     sa_id = subadmin['_id']
 #     base_wgs = subadmin['geom']
-#     home_range_km = max_home_range.get(sa_id, 0) or 0
+#     home_range_area_km2 = max_home_range.get(sa_id, 0) or 0
+#     home_range_km = (home_range_area_km2 / 3.141592653589793) ** 0.5
 #     home_range_m = home_range_km * 1000
 #     base_albers = project(base_wgs, to_Albers)
 #     buffered_albers = base_albers.buffer(home_range_m) if home_range_m > 0 else base_albers
