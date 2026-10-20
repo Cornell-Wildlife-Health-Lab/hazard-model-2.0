@@ -379,13 +379,13 @@ try:
         # Areas outside early detection receive zero surveillance points.
         eligible = [
             row for row in full_output_list
-            if row.get('surveillanceCategory') == 'Early Detection'
+            if row.get('surveillanceCategory') == 'early detection'
             and row.get('TotalHazard') is not None
             and row.get('DemographicWeight') is not None
         ]
         logging.info(
             f"{len(eligible)} subadmin areas eligible for surveillance point allocation "
-            f"(surveillanceCategory == 'Early Detection' with TotalHazard and DemographicWeight)."
+            f"(surveillanceCategory == 'early detection' with TotalHazard and DemographicWeight)."
         )
 
         sa_ids  = [row['SubAdminID']               for row in eligible]
