@@ -405,7 +405,7 @@ for area in all_subadmin_areas:
   # Surveillance category: "monitoring" if Detected, "early detection" otherwise.
   # If no cwd_presence years provided, all samples included; areas with no
   # Detected samples get None status and are assigned "early detection".
-  surveillance_category = 'monitoring' if status == 'Detected' else 'early detection'
+  surveillance_category = 'Monitoring' if status == 'Detected' else 'Early Detection'
 
   cwd_status_rows.append({
     'SubAdminID': sa_id,
@@ -433,7 +433,7 @@ logging.info("CWDStatus.csv written successfully.")
 logging.info("Identifying sub-administrative areas for modeling (surveillance category: early detection)...")
 selected_subadmin_ids = {
   row['SubAdminID'] for row in cwd_status_rows
-  if row['SurveillanceCategory'] == 'early detection'
+  if row['SurveillanceCategory'] == 'Early Detection'
 }
 selected_subadmin_areas = [
   area for area in all_subadmin_areas

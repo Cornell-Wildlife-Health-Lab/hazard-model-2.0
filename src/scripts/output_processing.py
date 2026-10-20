@@ -205,7 +205,7 @@ try:
     for row in model_output_dict_list:
         sa_id = row.get('SubAdminID')
         enriched_row = {}
-        enriched_row['SubAdminID'] = row.get('SubAdminID')
+        enriched_row['SubAdminID'] = row.get('SubAdminID')  # renamed to subadminID at final output stage
         enriched_row['FullName'] = row.get('FullName')
         enriched_row['EffectiveDistance'] = effective_distance_by_id.get(sa_id)
         if sa_id in data_totals_by_id:
@@ -379,13 +379,13 @@ try:
         # Areas outside early detection receive zero surveillance points.
         eligible = [
             row for row in full_output_list
-            if row.get('SurveillanceCategory') == 'early detection'
+            if row.get('SurveillanceCategory') == 'Early Detection'
             and row.get('TotalHazard') is not None
             and row.get('DemographicWeight') is not None
         ]
         logging.info(
             f"{len(eligible)} subadmin areas eligible for surveillance point allocation "
-            f"(SurveillanceCategory == 'Early' with TotalHazard and DemographicWeight)."
+            f"(SurveillanceCategory == 'Early Detection' with TotalHazard and DemographicWeight)."
         )
 
         sa_ids  = [row['SubAdminID']               for row in eligible]
@@ -484,7 +484,12 @@ try:
     # -------------------------------------------------------------------------
     # Identify numeric keys and perform type conversion / rounding
     # -------------------------------------------------------------------------
-    protected_keys = {'FullName', 'SubAdminID', 'CWDStatus', 'SurveillanceCategory'}
+    # Rename SubAdminID → subadminID for downstream consumers before type conversion
+    for row in full_output_list:
+        if 'SubAdminID' in row:
+            row['subadminID'] = row.pop('SubAdminID')
+
+    protected_keys = {'FullName', 'subadminID', 'CWDStatus', 'SurveillanceCategory'}
     float_keys = [k for k in full_output_list[0].keys() if k not in protected_keys]
 
     for each_row in full_output_list:
