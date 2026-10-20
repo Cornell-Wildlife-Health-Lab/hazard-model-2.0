@@ -353,8 +353,8 @@ try:
 
     if not surveillance_point_total:
         for row in full_output_list:
-            row['SurveillancePoints'] = None
-        logging.info("No surveillance_point_total provided. SurveillancePoints set to 0 for all areas.")
+            row['totalQuota'] = None
+        logging.info("No surveillance_point_total provided. Surveillance Points (totalQuota) set to 0 for all areas.")
 
     elif not demographic_weight_by_id:
         # Fallback: no demographic weights -- allocate by TotalHazard only.
@@ -366,9 +366,9 @@ try:
         for row in full_output_list:
             hazard = row.get('TotalHazard')
             if hazard is not None and hazard_sum > 0:
-                row['SurveillancePoints'] = int(float(hazard) / hazard_sum * surveillance_point_total)
+                row['totalQuota'] = int(float(hazard) / hazard_sum * surveillance_point_total)
             else:
-                row['SurveillancePoints'] = 0
+                row['totalQuota'] = 0
         logging.info(f"Surveillance points allocated using TotalHazard only (no demographic weights; total: {surveillance_point_total}).")
 
     else:
@@ -398,7 +398,7 @@ try:
 
         if hazard_total == 0 or demog_total == 0:
             for row in full_output_list:
-                row['SurveillancePoints'] = 0
+                row['totalQuota'] = 0
             logging.warning(
                 "Surveillance point allocation skipped: sum of TotalHazard or "
                 "DemographicWeight is zero across all eligible areas."
@@ -418,7 +418,7 @@ try:
             integrated_total = sum(integrated)
             if integrated_total == 0:
                 for row in full_output_list:
-                    row['SurveillancePoints'] = 0
+                    row['totalQuota'] = 0
                 logging.warning("Surveillance point allocation skipped: integrated vector sums to zero.")
             else:
                 integrated_std = [v / integrated_total for v in integrated]
@@ -473,7 +473,7 @@ try:
 
                 points_by_id = dict(zip(sa_ids, ideal))
                 for row in full_output_list:
-                    row['SurveillancePoints'] = points_by_id.get(row.get('SubAdminID'), 0)
+                    row['totalQuota'] = points_by_id.get(row.get('SubAdminID'), 0)
 
                 logging.info(
                     f"Surveillance points allocated using constrained demography-weighted algorithm "
@@ -492,10 +492,10 @@ try:
             val = safely_convert_float(each_row[each_key])
             each_row[each_key] = round(val, 4) if val is not None else None
 
-    # Round SurveillancePoints to nearest integer for final output
+    # Round totalQuota to nearest integer for final output
     for row in full_output_list:
-        if row.get('SurveillancePoints') is not None:
-            row['SurveillancePoints'] = round(row['SurveillancePoints'])
+        if row.get('totalQuota') is not None:
+            row['totalQuota'] = round(row['totalQuota'])
 
     # -------------------------------------------------------------------------
     # Write outputs
