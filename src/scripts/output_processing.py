@@ -251,7 +251,7 @@ try:
     output_field_names = [k for k in enriched_output_list[0].keys() if k not in ('SubAdminID', 'FullName')]
 
     # CWD status field names (excluding SubAdminID and FullName - sourced from base)
-    cwd_field_names = ['CWDStatus', 'SurveillanceCategory']
+    cwd_field_names = ['CWDStatus', 'surveillanceCategory']
 
     full_output_list = []
     for area in all_subadmin_areas:
@@ -375,17 +375,17 @@ try:
         # Full constrained demography-weighted allocation.
 
         # Eligible rows: must be in the 'early detection' 
-        # SurveillanceCategory and have both TotalHazard and DemographicWeight.
+        # surveillanceCategory and have both TotalHazard and DemographicWeight.
         # Areas outside early detection receive zero surveillance points.
         eligible = [
             row for row in full_output_list
-            if row.get('SurveillanceCategory') == 'Early Detection'
+            if row.get('surveillanceCategory') == 'Early Detection'
             and row.get('TotalHazard') is not None
             and row.get('DemographicWeight') is not None
         ]
         logging.info(
             f"{len(eligible)} subadmin areas eligible for surveillance point allocation "
-            f"(SurveillanceCategory == 'Early Detection' with TotalHazard and DemographicWeight)."
+            f"(surveillanceCategory == 'Early Detection' with TotalHazard and DemographicWeight)."
         )
 
         sa_ids  = [row['SubAdminID']               for row in eligible]
@@ -489,7 +489,7 @@ try:
         if 'SubAdminID' in row:
             row['subadminID'] = row.pop('SubAdminID')
 
-    protected_keys = {'FullName', 'subadminID', 'CWDStatus', 'SurveillanceCategory'}
+    protected_keys = {'FullName', 'subadminID', 'CWDStatus', 'surveillanceCategory'}
     float_keys = [k for k in full_output_list[0].keys() if k not in protected_keys]
 
     for each_row in full_output_list:

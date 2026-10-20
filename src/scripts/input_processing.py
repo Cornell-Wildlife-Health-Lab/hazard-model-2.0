@@ -411,7 +411,7 @@ for area in all_subadmin_areas:
     'SubAdminID': sa_id,
     'FullName': area.get('full_name'),
     'CWDStatus': status,
-    'SurveillanceCategory': surveillance_category
+    'surveillanceCategory': surveillance_category
   })
 
 
@@ -419,7 +419,7 @@ for area in all_subadmin_areas:
 with open(data_path / 'CWDStatus.csv', 'w', newline='') as f:
   writer = csv.DictWriter(
     f,
-    fieldnames=['SubAdminID', 'FullName', 'CWDStatus', 'SurveillanceCategory'])
+    fieldnames=['SubAdminID', 'FullName', 'CWDStatus', 'surveillanceCategory'])
   writer.writeheader()
   writer.writerows(cwd_status_rows)
 logging.info("CWDStatus.csv written successfully.")
@@ -433,7 +433,7 @@ logging.info("CWDStatus.csv written successfully.")
 logging.info("Identifying sub-administrative areas for modeling (surveillance category: early detection)...")
 selected_subadmin_ids = {
   row['SubAdminID'] for row in cwd_status_rows
-  if row['SurveillanceCategory'] == 'Early Detection'
+  if row['surveillanceCategory'] == 'Early Detection'
 }
 selected_subadmin_areas = [
   area for area in all_subadmin_areas
