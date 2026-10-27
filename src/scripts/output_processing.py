@@ -279,82 +279,92 @@ try:
 
     # -------------------------------------------------------------------------
     # Demographic weight and surveillance point allocation
-    # Loads demographic_weight.ndJson and computes a total population weight
-    # per subadmin area by:
-    #   - total population: sum values directly across records
-    #   - deer density: multiply by subadmin area (kmÂ²) then sum
-    #   - total harvest: sum values directly across records
-    # Null values are treated as zero.
-    # Surveillance points are then allocated proportionally to TotalHazard
-    # weighted by the demographic weight, scaled to surveillance_point_total.
+    #
+    # Behavior matrix:
+    #   surveillance_point_total NOT provided:
+    #     - Demographic weights are not loaded (the UI prevents the user from
+    #       supplying them in this case).
+    #     - DemographicWeight and totalQuota columns are emitted as None for
+    #       every row.
+    #
+    #   surveillance_point_total provided, demographic_weight.ndJson NOT provided:
+    #     - totalQuota is allocated proportionally to TotalHazard only (no
+    #       demographic weighting, no capacity cap).
+    #     - DemographicWeight column is emitted as None for every row.
+    #
+    #   surveillance_point_total provided AND demographic_weight.ndJson provided:
+    #     - Demographic weights are aggregated per subadmin area:
+    #         * total population: sum values directly across records
+    #         * deer density:     multiply by subadmin area (km²) then sum
+    #         * total harvest:    sum values directly across records
+    #       Null values are treated as zero.
+    #     - totalQuota is allocated using the constrained iterative
+    #       demography-weighting algorithm from DemographyWeighting.R:
+    #         1. Standardize TotalHazard and DemographicWeight (each sums to 1).
+    #         2. Integrate: units with zero DemographicWeight score 0 (no deer
+    #            -> hazard is irrelevant); others get hazard_std + demog_std.
+    #         3. Standardize the integrated vector.
+    #         4. Cap the budget at the jurisdiction-wide maximum
+    #            (sum of demog * 1.5).
+    #         5. Initial allocation: floor(budget * integrated_std) per unit.
+    #         6. Iteratively cap over-capacity units and redistribute surplus
+    #            to remaining units proportional to their TotalHazard.
     # -------------------------------------------------------------------------
+    surveillance_point_total = params.get('surveillance_planning', {}).get('surveillance_point_total')
 
-    # Load subadmin areas (kmÂ²) for density â†’ population conversion
-    subadmin_area_km2 = {}
-    if subadmin_areas_csv_path.exists():
-        with open(subadmin_areas_csv_path, 'r') as f:
-            for row in csv.DictReader(f):
-                sa_id = row.get('SubAdminID')
-                if sa_id:
-                    subadmin_area_km2[sa_id] = float(row.get('AreaKm2', 0) or 0)
-        logging.info(f"Loaded area data for {len(subadmin_area_km2)} subadmin areas.")
-    else:
-        logging.warning("SubadminAreas.csv not found. Density conversion will not be possible.")
-
-    # Load and aggregate demographic weights
     demographic_weight_by_id = {}  # {subadmin_id: total_population_weight}
-    if demographic_weight_file_path.exists():
-        metric = None
-        with open(demographic_weight_file_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if not line.strip():
-                    continue
-                record = json.loads(line)
-                metric = record.get('metric')  # same across all records
-                for sa_id, value in record.get('data', {}).items():
-                    value = float(value) if value is not None else 0.0
-                    if metric == 'deer density':
-                        area_km2 = subadmin_area_km2.get(sa_id, 0)
-                        value = value * area_km2
-                    # total population and total harvest: use directly
-                    demographic_weight_by_id[sa_id] = demographic_weight_by_id.get(sa_id, 0.0) + value
-        logging.info(f"Demographic weights aggregated for {len(demographic_weight_by_id)} subadmin areas (metric: {metric}).")
-        model_log_html(f"Demographic weights loaded (metric: {metric}).", "p")
-    else:
-        logging.info("demographic_weight.ndJson not found. Falling back to TotalHazard-only allocation for surveillance points.")
-        model_log_html("demographic_weight.ndJson not found. Allocating surveillance points using TotalHazard only.", "p")
 
-    # Add demographic weight to each row
+    if surveillance_point_total:
+        # Load subadmin areas (km²) for density → population conversion
+        subadmin_area_km2 = {}
+        if subadmin_areas_csv_path.exists():
+            with open(subadmin_areas_csv_path, 'r') as f:
+                for row in csv.DictReader(f):
+                    sa_id = row.get('SubAdminID')
+                    if sa_id:
+                        subadmin_area_km2[sa_id] = float(row.get('AreaKm2', 0) or 0)
+            logging.info(f"Loaded area data for {len(subadmin_area_km2)} subadmin areas.")
+        else:
+            logging.warning("SubadminAreas.csv not found. Density conversion will not be possible.")
+
+        # Load and aggregate demographic weights (optional even when quota is set)
+        if demographic_weight_file_path.exists():
+            metric = None
+            with open(demographic_weight_file_path, 'r', encoding='utf-8') as f:
+                for line in f:
+                    if not line.strip():
+                        continue
+                    record = json.loads(line)
+                    metric = record.get('metric')  # same across all records
+                    for sa_id, value in record.get('data', {}).items():
+                        value = float(value) if value is not None else 0.0
+                        if metric == 'deer density':
+                            area_km2 = subadmin_area_km2.get(sa_id, 0)
+                            value = value * area_km2
+                        # total population and total harvest: use directly
+                        demographic_weight_by_id[sa_id] = demographic_weight_by_id.get(sa_id, 0.0) + value
+            logging.info(f"Demographic weights aggregated for {len(demographic_weight_by_id)} subadmin areas (metric: {metric}).")
+            model_log_html(f"Demographic weights loaded (metric: {metric}).", "p")
+        else:
+            logging.info("demographic_weight.ndJson not provided. Allocating surveillance points by TotalHazard only.")
+            model_log_html("Demographic weights not provided. Allocating surveillance points using TotalHazard only.", "p")
+    else:
+        logging.info("surveillance_point_total not provided. Demographic weights will not be loaded; DemographicWeight and totalQuota will be None for all areas.")
+
+    # Add demographic weight to every row. When weights were not loaded (either
+    # because no quota was requested or no weights file was supplied) this
+    # yields None for every row, which is the intended output.
     for row in full_output_list:
         sa_id = row.get('SubAdminID')
         row['DemographicWeight'] = demographic_weight_by_id.get(sa_id)
 
     # -------------------------------------------------------------------------
     # Surveillance point allocation
-    # Implements the constrained iterative demography-weighting algorithm
-    # from DemographyWeighting.R.
-    #
-    # Algorithm:
-    #   1. Standardize TotalHazard and DemographicWeight (each sums to 1).
-    #   2. Integrate: units with zero DemographicWeight score 0 (no deer ->
-    #      hazard is irrelevant); others get hazard_std and demography_std.
-    #   3. Standardize the integrated vector.
-    #   4. Cap the budget at the jurisdiction-wide maximum (sum demog * 1.5).
-    #   5. Initial allocation: floor(budget * integrated_std) per unit.
-    #   6. Iteratively cap over-capacity units and redistribute the surplus
-    #      to remaining units proportional to their TotalHazard.
-    #
-    # Fallbacks:
-    #   - No surveillance_point_total  -> all areas receive None.
-    #   - No demographic weights       -> simple hazard-proportional allocation
-    #                                     with no capacity cap.
     # -------------------------------------------------------------------------
-    surveillance_point_total = params.get('surveillance_planning', {}).get('surveillance_point_total')
-
     if not surveillance_point_total:
         for row in full_output_list:
             row['totalQuota'] = None
-        logging.info("No surveillance_point_total provided. Surveillance Points (totalQuota) set to 0 for all areas.")
+        logging.info("No surveillance_point_total provided. totalQuota set to None for all areas.")
 
     elif not demographic_weight_by_id:
         # Fallback: no demographic weights -- allocate by TotalHazard only.

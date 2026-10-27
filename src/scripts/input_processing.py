@@ -343,9 +343,9 @@ del(params['_provider'])
 # Samples without a subadmin area are skipped.
 logging.info("Processing CWD status from sample data...")
 # Retrieve the season-year filter from params.
+# cwd_presence is an optional top-level property in params.
 # If no years are provided, all samples are included.
-surveillance_params = params.get('surveillance_planning', {})
-presence_years = set(surveillance_params.get('cwd_presence', []))
+presence_years = set(params.get('cwd_presence', []) or [])
 logging.info(f"CWD presence years: {presence_years}")
 # {subadmin_id: True} — True if any Detected result found in qualifying samples
 cwd_detected_ids = set()
