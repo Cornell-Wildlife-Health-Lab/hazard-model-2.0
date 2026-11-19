@@ -1,11 +1,8 @@
-#_______________________________________________________________________________
-#
 # Hazard Model 2.0
 #
 # AUTHOR: Brenda Hanley
 # ERROR HANDLING: Brenda Hanley
 # MODEL LOGGING: Brenda Hanley
-# QAQC:
 #
 # Location: Cornell Wildlife Health Lab
 # Licence: MIT
@@ -111,19 +108,13 @@ add_item_to_json_array=function(file_path, new_item) {
 	# Check. Make sure that there are no NAs in the weights table as it could cause problems in shadow math. 
 	Weights[is.na(Weights)]=0
 	
-	# REVIEW: When no risk factors are selected (all UserSelection=0, so all weights are 0), 
-	# the model now proceeds with baseline-only output instead of terminating. 
-	# BaselineRisk is still computed per area from EffectiveDistance; TotalRisk is 0; 
-	# TotalHazard equals BaselineRisk; e_Baseline is 1 (baseline fully explains hazard); 
-	# and per-factor elasticities (e_<Factor>, ew_<Factor>) are 0 (then nulled out in 
-	# output.json by output_processing.py based on UserSelection=0). 
-	# A log message informs the user that this is a baseline-only run. 
-	# 
-	# Previously, this block checked whether any weight was non-zero and terminated 
-	# the model otherwise. The modeler requested that baseline-only runs be a valid 
-	# output mode, so the terminator has been removed. 
-
-	# Check whether any risk factor has non-zero weights (i.e., any factor is "active"). 
+	# Handle the case where no risk factors are selected. The model supports
+	# baseline-only runs: BaselineRisk is still computed per area from
+	# EffectiveDistance, TotalRisk is 0, TotalHazard equals BaselineRisk,
+	# e_Baseline is 1 (baseline fully explains hazard), and per-factor
+	# elasticities are 0 (and later nulled out in output.json by
+	# output_processing.py based on UserSelection=0). Inform the user via the
+	# model log that this is a baseline-only run.
 	NotZero=Weights[rowSums(Weights!=0)>0,]
 	NotZeroDim=as.numeric(nrow(NotZero))
 	if (NotZeroDim==0){
@@ -284,11 +275,11 @@ add_item_to_json_array=function(file_path, new_item) {
 	      if (as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])==0){Cleaned_DataTotals[k,21]=0}else{Cleaned_DataTotals[k,21]=as.numeric(Cleaned_DataTotals[k,21])/as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])}
 	      }
 	  }}
-	# Now that the units are consistent, we will scale the entire vector to one. 
-	# REVIEW: Guard against division by zero. When the column sum is 0 (e.g., all values 
-	# are 0 or NA because no dispersal data were provided), dividing produces NaN, 
-	# which later cascades through is.na() checks and causes every area to be dropped. 
-	# In that case, leave the column as-is (it is already all 0s or NAs). 
+	# Normalize the dispersal column so its non-NA entries sum to one. Guard
+	# against division by zero: if the column sum is 0 (e.g., no dispersal data
+	# were provided, so all values are 0 or NA), skip the rescale and leave the
+	# column as-is. Otherwise, dividing by zero would produce NaN and cascade
+	# through downstream is.na() checks, causing every area to be dropped.
 	dispersal_sum=sum(as.numeric(Cleaned_DataTotals[,21]),na.rm=TRUE)
 	if (dispersal_sum>0){
 	  Cleaned_DataTotals[,21]=as.numeric(Cleaned_DataTotals[,21])/dispersal_sum
@@ -308,11 +299,12 @@ add_item_to_json_array=function(file_path, new_item) {
 	      if(as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])==0){Cleaned_DataTotals[k,22]=0}else{Cleaned_DataTotals[k,22]=as.numeric(Cleaned_DataTotals[k,22])/as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])}
 	      }
 	  }}
-	# Now that the units are consistent, we will scale the entire vector to one. 
-	# REVIEW: Guard against division by zero. When the column sum is 0 (e.g., all values 
-	# are 0 or NA because no seasonal migration data were provided), dividing produces NaN, 
-	# which later cascades through is.na() checks and causes every area to be dropped. 
-	# In that case, leave the column as-is (it is already all 0s or NAs). 
+	# Normalize the seasonal migration column so its non-NA entries sum to one.
+	# Guard against division by zero: if the column sum is 0 (e.g., no seasonal
+	# migration data were provided, so all values are 0 or NA), skip the rescale
+	# and leave the column as-is. Otherwise, dividing by zero would produce NaN
+	# and cascade through downstream is.na() checks, causing every area to be
+	# dropped.
 	migration_sum=sum(as.numeric(Cleaned_DataTotals[,22]),na.rm=TRUE)
 	if (migration_sum>0){
 	  Cleaned_DataTotals[,22]=as.numeric(Cleaned_DataTotals[,22])/migration_sum
@@ -362,14 +354,12 @@ add_item_to_json_array=function(file_path, new_item) {
 	  
 	  	  WeightVector=as.numeric(UsedWeights) # 20 element vector with all numbers.
 	  
-	  # REVIEW: Only consider SELECTED risk factors (those with non-zero weight) when 
-	  # checking for missing data and computing the weighted sum. Previously, this 
-	  # block checked all 20 columns for NA, so a missing value in an UNSELECTED risk 
-	  # factor would poison the sum (because 0 * NA = NA in R) and the entire area 
-	  # would be marked as insufficient. Now, NA in an unselected factor is ignored 
-	  # because that factor contributes nothing to the sum anyway. NA in a selected 
-	  # factor still produces TotalPerCell = NA so the downstream logic can decide 
-	  # how to handle it. 
+		# Compute the weighted risk sum using only SELECTED risk factors (those
+	  # with non-zero weight). Unselected factors are skipped entirely, so an
+	  # NA in an unselected factor cannot poison the sum (in R, 0 * NA = NA,
+	  # which would otherwise mark the entire area as having insufficient data).
+	  # An NA in a selected factor still yields TotalPerCell = NA, letting
+	  # downstream logic handle the missing-data case.
 	  SelectedIdx=which(WeightVector!=0)
 	  if (length(SelectedIdx)==0){
 	    # No selected risk factors contribute to this area (e.g., all selected factors 
@@ -414,7 +404,7 @@ add_item_to_json_array=function(file_path, new_item) {
 	                               "e_RehabilitationFacilities","e_Taxidermists","e_Processors",
 	                               "e_RenderingFacilities","e_Incinerators","e_FoodBanks",
 	                               "e_Landfill","e_Dumping","e_Sheds","e_Roadkill","e_LocalPractices",
-	                          "e_FreeRangingCervidDispersal","e_SeasonalMigration",
+	                          		 "e_FreeRangingCervidDispersal","e_SeasonalMigration",
 	                               "ew_MineralLicks","ew_WaterBodies",
 	                               "ew_Feedgrounds","ew_Guzzlers","ew_BaitingStations",
 	                               "ew_AgriculturalPractices","ew_CaptiveCervidFacilities",
