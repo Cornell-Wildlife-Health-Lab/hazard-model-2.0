@@ -1,11 +1,8 @@
-#_______________________________________________________________________________
-#
 # Hazard Model 2.0
-# 
+#
 # AUTHOR: Brenda Hanley
 # ERROR HANDLING: Brenda Hanley
 # MODEL LOGGING: Brenda Hanley
-# QAQC: 
 #
 # Location: Cornell Wildlife Health Lab
 # Licence: MIT
@@ -13,7 +10,7 @@
 # This code corresponds to the work by Thompson et al.
 #
 # This code was written under:
-# R version 4.4.1 (2024-06-14 ucrt) -- "Race for Your Life"
+# R version 4.4.1 (2024-06-14 uct) -- "Race for Your Life"
 # Copyright (C) 2024 The R Foundation for Statistical Computing
 # Platform: x86_64-w64-mingw32/x64
 #
@@ -108,70 +105,22 @@ add_item_to_json_array=function(file_path, new_item) {
   # Zero out weights of risk factors that are irrelevant in model.
 	Weights[Weights$UserSelection=="0",]=0
 	
-	# Check. If the user selects only one risk factor, and that risk factor 
-	# has a NA for a weight, then stop the code. 
-	if (NumberRisksSelected==1){
-	  which=Weights$UserSelection[Weights$UserSelection==1]
-	    if (is.na(Weights$WeightNear[which])){
-	      # Terminate the code. 
-	      line="We're sorry. You selected a single risk factor, and that factor does not 
-	      have a valid near weight. Return to the CWD Data Warehouse and alter the 
-	      weights, or select a new set of near risk factors."
-	      write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
-	      # Quit the session.
-	      quit(status=70)}
-	  if (is.na(Weights$WeightFar[which])){
-	    # Terminate the code. 
-	    line="We're sorry. You selected a single risk factor, and that factor does not 
-	      have a valid far weight. Return to the CWD Data Warehouse and alter the 
-	      weights, or select a new set of far risk factors."
-	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
-	    # Quit the session.
-	    quit(status=70)}
-	  }
-	
-	# Check. If the user selects only one risk factor, and that risk factor 
-	# has a 0 for a weight, then stop the code. 
-	if (NumberRisksSelected==1){
-	  which=as.numeric(Weights$UserSelection[Weights$UserSelection==1])
-	  if (Weights$WeightNear[which]==0){
-	    # Terminate the code. 
-	    line="We're sorry. You selected a single risk factor, and that factor does not 
-	      have a non-zero near weight. Return to the CWD Data Warehouse and alter the 
-	    weights, or select a new set of near risk factors."
-	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
-	    # Quit the session.
-	    quit(status=70)}
-	  if (Weights$WeightFar[which]==0){
-	    # Terminate the code. 
-	    line="We're sorry. You selected a single risk factor, and that factor does not 
-	      have a non-zero far weight. Return to the CWD Data Warehouse and alter the 
-	    weights, or select a new set of far risk factors."
-	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
-	    # Quit the session.
-	    quit(status=70)}
-	  }
-
-  # At this point, the risk factors table and the weights table should only have 
-  # weights and SDs for relevant risk factors (and no weights where irrelevant). 
-	# At least one relevant risk factor has non-zero weight. 
-	
-  # Check. Make sure that there are no NAs in the weights table as it could cause problems in shadow math. 
+	# Check. Make sure that there are no NAs in the weights table as it could cause problems in shadow math. 
 	Weights[is.na(Weights)]=0
-
-  # Check. User could have any assortment of risk factors in there, but make sure at 
-	# least one risk factor exists with non-zero weights.
+	
+	# Handle the case where no risk factors are selected. The model supports
+	# baseline-only runs: BaselineRisk is still computed per area from
+	# EffectiveDistance, TotalRisk is 0, TotalHazard equals BaselineRisk,
+	# e_Baseline is 1 (baseline fully explains hazard), and per-factor
+	# elasticities are 0 (and later nulled out in output.json by
+	# output_processing.py based on UserSelection=0). Inform the user via the
+	# model log that this is a baseline-only run.
 	NotZero=Weights[rowSums(Weights!=0)>0,]
 	NotZeroDim=as.numeric(nrow(NotZero))
-	# If all are zeros, terminate the script.
 	if (NotZeroDim==0){
-	    line="We're sorry. This map would be boring because there are no weights!"
-	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
-	    line="Please return to the CWD Data Warehouse and select a different set of weights."
-	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE) 
-	    # Quit the session.
-	    quit(status=70)
-	  } # End if weights do not exist.
+	    line="No risk factors were selected for this model run. The model will produce baseline-only hazard results, which reflect proximity to known CWD-positive areas but do not incorporate any risk-factor contributions. To include risk factors, return to the CWD Data Warehouse and select one or more."
+	    write(html_tag_line(line, "p"),file=model_log_filepath,append=TRUE)
+	  } # End if no risk factors are selected.
 	
 	Cleaned_Weights=Weights
 	
@@ -326,10 +275,17 @@ add_item_to_json_array=function(file_path, new_item) {
 	      if (as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])==0){Cleaned_DataTotals[k,21]=0}else{Cleaned_DataTotals[k,21]=as.numeric(Cleaned_DataTotals[k,21])/as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])}
 	      }
 	  }}
-	# Now that the units are consistent, we will scale the entire vector to one. 
-	Cleaned_DataTotals[,21]=as.numeric(Cleaned_DataTotals[,21])/sum(as.numeric(Cleaned_DataTotals[,21]),na.rm=TRUE)
+	# Normalize the dispersal column so its non-NA entries sum to one. Guard
+	# against division by zero: if the column sum is 0 (e.g., no dispersal data
+	# were provided, so all values are 0 or NA), skip the rescale and leave the
+	# column as-is. Otherwise, dividing by zero would produce NaN and cascade
+	# through downstream is.na() checks, causing every area to be dropped.
+	dispersal_sum=sum(as.numeric(Cleaned_DataTotals[,21]),na.rm=TRUE)
+	if (dispersal_sum>0){
+	  Cleaned_DataTotals[,21]=as.numeric(Cleaned_DataTotals[,21])/dispersal_sum
+	}
 	
-	# Finally, we will scale seasonal migration (column #22). 
+	# Finally, we will scale seasonal migration (column #22).  
 	# Seasonal migration matters fully (i.e., has a value of 1) if the herd's movements touch the nearest known infection.
 	# Thus, if the seasonal migration is greater than the distance to the nearest positive, then the value will be scaled to 1. 
 	# Whereas if seasonal migration is less than the distance to the nearest positive, then the value will be scaled to the proportion of the distance. 
@@ -343,10 +299,18 @@ add_item_to_json_array=function(file_path, new_item) {
 	      if(as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])==0){Cleaned_DataTotals[k,22]=0}else{Cleaned_DataTotals[k,22]=as.numeric(Cleaned_DataTotals[k,22])/as.numeric(Cleaned_EffectiveDistance$EffectiveDistance[k])}
 	      }
 	  }}
-	# Now that the units are consistent, we will scale the entire vector to one. 
-	Cleaned_DataTotals[,22]=as.numeric(Cleaned_DataTotals[,22])/sum(as.numeric(Cleaned_DataTotals[,22]),na.rm=TRUE)
+	# Normalize the seasonal migration column so its non-NA entries sum to one.
+	# Guard against division by zero: if the column sum is 0 (e.g., no seasonal
+	# migration data were provided, so all values are 0 or NA), skip the rescale
+	# and leave the column as-is. Otherwise, dividing by zero would produce NaN
+	# and cascade through downstream is.na() checks, causing every area to be
+	# dropped.
+	migration_sum=sum(as.numeric(Cleaned_DataTotals[,22]),na.rm=TRUE)
+	if (migration_sum>0){
+	  Cleaned_DataTotals[,22]=as.numeric(Cleaned_DataTotals[,22])/migration_sum
+	}
 	
-	# The complete scaled data table is now named Cleaned_DataTotals. 
+	# The complete scaled data table is now named Cleaned_DataTotals.  
 
 # FOLD DATA STREAMS TOGETHER ------------------------------------------------
 	
@@ -388,9 +352,27 @@ add_item_to_json_array=function(file_path, new_item) {
 	  UsedWeights=c()
 	  if(Cleaned_EffectiveDistance$EffectiveDistance[i]==0){UsedWeights=Weights$WeightNear}else{UsedWeights=Weights$WeightFar}
 	  
-	  WeightVector=as.numeric(UsedWeights) # 20 element vector with all numbers.
+	  	  WeightVector=as.numeric(UsedWeights) # 20 element vector with all numbers.
 	  
-	        if (any(is.na(DataCountMatrix[i,]))){TotalPerCell[i]=NA}else{TotalPerCell[i]=as.numeric(sum(WeightVector*DataCountMatrix[i,]))}
+		# Compute the weighted risk sum using only SELECTED risk factors (those
+	  # with non-zero weight). Unselected factors are skipped entirely, so an
+	  # NA in an unselected factor cannot poison the sum (in R, 0 * NA = NA,
+	  # which would otherwise mark the entire area as having insufficient data).
+	  # An NA in a selected factor still yields TotalPerCell = NA, letting
+	  # downstream logic handle the missing-data case.
+	  SelectedIdx=which(WeightVector!=0)
+	  if (length(SelectedIdx)==0){
+	    # No selected risk factors contribute to this area (e.g., all selected factors 
+	    # have zero weight for the relevant near/far case). Risk contribution is 0. 
+	    TotalPerCell[i]=0
+	  }else{
+	    SelectedRow=as.numeric(DataCountMatrix[i,SelectedIdx])
+	    if (any(is.na(SelectedRow))){
+	      TotalPerCell[i]=NA
+	    }else{
+	      TotalPerCell[i]=as.numeric(sum(WeightVector[SelectedIdx]*SelectedRow))
+	    }
+	  }
 
 	  # Compute the Total Hazard Per Cell. 
 	  if (is.na(TotalPerCell[i])){HazardPerCell[i]=NA}else{HazardPerCell[i]=BaselinePerCell[i]+BaselinePerCell[i]*TotalPerCell[i]}
@@ -418,14 +400,14 @@ add_item_to_json_array=function(file_path, new_item) {
 	                               "e_Baseline",
 	                               "e_MineralLicks","e_WaterBodies",
 	                               "e_Feedgrounds","e_Guzzlers","e_BaitingStations",
-	                               "e_AgriculturePractices","e_CaptiveCervidFacilities",
+	                               "e_AgriculturalPractices","e_CaptiveCervidFacilities",
 	                               "e_RehabilitationFacilities","e_Taxidermists","e_Processors",
 	                               "e_RenderingFacilities","e_Incinerators","e_FoodBanks",
 	                               "e_Landfill","e_Dumping","e_Sheds","e_Roadkill","e_LocalPractices",
-	                          "e_FreeRangingCervidDispersal","e_SeasonalMigration",
+	                          		 "e_FreeRangingCervidDispersal","e_SeasonalMigration",
 	                               "ew_MineralLicks","ew_WaterBodies",
 	                               "ew_Feedgrounds","ew_Guzzlers","ew_BaitingStations",
-	                               "ew_AgriculturePractices","ew_CaptiveCervidFacilities",
+	                               "ew_AgriculturalPractices","ew_CaptiveCervidFacilities",
 	                               "ew_RehabilitationFacilities","ew_Taxidermists","ew_Processors",
 	                               "ew_RenderingFacilities","ew_Incinerators","ew_FoodBanks",
 	                               "ew_Landfill","ew_Dumping","ew_Sheds","ew_Roadkill","ew_LocalPractices",

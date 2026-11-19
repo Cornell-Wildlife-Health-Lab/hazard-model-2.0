@@ -11,3 +11,4 @@ renv.lock
 # development environment
 .vscode/
 /data/
+.proj
